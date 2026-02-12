@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  # === DNSTwist Scan Engine ===
+  # The core scanning API that runs dnstwist fuzzing algorithms
+  # Port 8000 - Docs at http://localhost:8000/docs
+  dnstwist-api:
+    build: ./dnstwist-api
+    container_name: dnstwist-api
+    ports:
+      - "8000:8000"
+    environment:
+      - API_KEY=${DNSTWIST_API_KEY:-changeme}
+      - CALLBACK_URL=http://orchestrator-api:8001/api/callback
+      - CALLBACK_METHOD=POST
+    networks:
+      - typosquatting-net
+    restart: unless-stopped
+
+  # === Orchestrator API ===
+  # Manages scan jobs, receives callbacks, stores results
+  # Port 8001 - Docs at http://localhost:8001/docs
+  orchestrator-api:
+    build: ./orchestrator-api
+    container_name: orchestrator-api
+    ports:
+      - "8001:8001"
+    environment:
+      - DNSTWIST_API_URL=http://dnstwist-api:8000
+      - DNSTWIST_API_KEY=${DNSTWIST_API_KEY:-changeme}
+      - DATA_DIR=/data/dnstwist-results
+      - DB_PATH=/data/dnstwist-results/tasks.db
+    volumes:
+      - dnstwist-data:/data/dnstwist-results
+    networks:
+      - typosquatting-net
+    depends_on:
+      - dnstwist-api
+    restart: unless-stopped
+
+  # === WhoisDS NRD API ===
+  # Downloads and searches Newly Registered Domains
+  # Port 8002 - Docs at http://localhost:8002/docs
+  whoisds-api:
+    build: ./whoisds-api
+    container_name: whoisds-api
+    ports:
+      - "8002:8002"
+    environment:
+      - DATA_DIR=/data/whoisds
+    volumes:
+      - whoisds-data:/data/whoisds
+    networks:
+      - typosquatting-net
+    restart: unless-stopped
+
+volumes:
+  dnstwist-data:
+    driver: local
+  whoisds-data:
+    driver: local
+
+networks:
+  typosquatting-net:
+    driver: bridge
