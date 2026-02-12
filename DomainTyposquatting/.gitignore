@@ -3,6 +3,7 @@
 
 # Data volumes
 data/
+InstalledNRD/*.txt
 
 # Python
 __pycache__/

@@ -225,10 +225,13 @@ class LshAlgorithm(str, Enum):
 
 
 # === Request/Response Models ===
+ALL_FUZZERS = "addition,bitsquatting,homoglyph,hyphenation,insertion,omission,repetition,replacement,subdomain,transposition,vowel-swap,dictionary,tld-swap"
+
+
 class ScanRequest(BaseModel):
     domain: str = Field(..., description="Domain name to scan", example="example.com")
     registered: bool = Field(False, description="Show only registered (resolvable) domains")
-    fuzzers: Optional[str] = Field(None, description="Comma-separated list of fuzzers", example="homoglyph,bitsquatting")
+    fuzzers: Optional[str] = Field(None, description="Comma-separated list of fuzzers, or 'all' for every fuzzer", example="homoglyph,bitsquatting")
     nameservers: Optional[str] = Field(None, description="Custom DNS servers (comma-separated)", example="8.8.8.8,1.1.1.1")
     threads: int = Field(10, ge=1, le=100, description="Number of threads")
     whois: bool = Field(False, description="Perform WHOIS lookups")
@@ -571,24 +574,25 @@ def permutations(
     Very fast - useful for getting the list of domains to check.
     """
     try:
+        effective_fuzzers = ALL_FUZZERS if (fuzzers and fuzzers.strip().lower() == "all") else fuzzers
         kwargs = {
             "domain": domain,
             "format": "list",
             "output": dnstwist.devnull,
         }
-        if fuzzers:
-            kwargs["fuzzers"] = fuzzers
-        
+        if effective_fuzzers:
+            kwargs["fuzzers"] = effective_fuzzers
+
         # Add dictionaries if needed
-        fuzzers_list = fuzzers.split(",") if fuzzers else []
+        fuzzers_list = effective_fuzzers.split(",") if effective_fuzzers else []
         if "tld-swap" in fuzzers_list and os.path.exists(TLD_DICT):
             kwargs["tld"] = TLD_DICT
         if "dictionary" in fuzzers_list and os.path.exists(ENGLISH_DICT):
             kwargs["dictionary"] = ENGLISH_DICT
-        
+
         results = dnstwist.run(**kwargs)
         domains = [r.get("domain") for r in results if r.get("domain")]
-        
+
         return {
             "domain": domain,
             "total": len(domains),
@@ -605,24 +609,25 @@ def permutations_list(
 ):
     """Get permutations as plain text (one per line)"""
     try:
+        effective_fuzzers = ALL_FUZZERS if (fuzzers and fuzzers.strip().lower() == "all") else fuzzers
         kwargs = {
             "domain": domain,
             "format": "list",
             "output": dnstwist.devnull,
         }
-        if fuzzers:
-            kwargs["fuzzers"] = fuzzers
-        
+        if effective_fuzzers:
+            kwargs["fuzzers"] = effective_fuzzers
+
         # Add dictionaries if needed
-        fuzzers_list = fuzzers.split(",") if fuzzers else []
+        fuzzers_list = effective_fuzzers.split(",") if effective_fuzzers else []
         if "tld-swap" in fuzzers_list and os.path.exists(TLD_DICT):
             kwargs["tld"] = TLD_DICT
         if "dictionary" in fuzzers_list and os.path.exists(ENGLISH_DICT):
             kwargs["dictionary"] = ENGLISH_DICT
-        
+
         results = dnstwist.run(**kwargs)
         domains = [r.get("domain") for r in results if r.get("domain")]
-        
+
         return "\n".join(domains)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -655,7 +660,8 @@ def _build_kwargs(
     if registered:
         kwargs["registered"] = True
     if fuzzers:
-        kwargs["fuzzers"] = fuzzers
+        # "all" expands to every available fuzzer
+        kwargs["fuzzers"] = ALL_FUZZERS if fuzzers.strip().lower() == "all" else fuzzers
     if nameservers:
         kwargs["nameservers"] = nameservers
     if whois:

@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
 
   # === Orchestrator API ===
-  # Manages scan jobs, receives callbacks, stores results
+  # Central hub: unified domain DB, receives callbacks, calls who-dat
   # Port 8001 - Docs at http://localhost:8001/docs
   orchestrator-api:
     build: ./orchestrator-api
@@ -35,18 +35,21 @@ services:
     environment:
       - DNSTWIST_API_URL=${DNSTWIST_API_URL:-http://dnstwist-api:8000}
       - DNSTWIST_API_KEY=${DNSTWIST_API_KEY:-changeme}
+      - WHO_DAT_URL=${WHO_DAT_URL:-http://who-dat:8080}
       - DATA_DIR=/data/dnstwist-results
-      - DB_PATH=/data/dnstwist-results/tasks.db
+      - DB_PATH=/data/dnstwist-results/domains.db
     volumes:
       - dnstwist-data:/data/dnstwist-results
     networks:
       - typosquatting-net
     depends_on:
       - dnstwist-api
+      - who-dat
     restart: unless-stopped
 
   # === WhoisDS NRD API ===
   # Downloads and searches Newly Registered Domains
+  # NRD files are bind-mounted to ./InstalledNRD so they survive rebuilds
   # Port 8002 - Docs at http://localhost:8002/docs
   whoisds-api:
     build: ./whoisds-api
@@ -55,8 +58,29 @@ services:
       - "8002:8002"
     environment:
       - DATA_DIR=/data/whoisds
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://orchestrator-api:8001}
     volumes:
-      - whoisds-data:/data/whoisds
+      # Bind-mount NRD files to host so they persist across rebuilds
+      # On Azure: swap this for an Azure Files share or BlobFuse mount
+      - ./InstalledNRD:/data/whoisds/nrd-files
+      - whoisds-data:/data/whoisds/matched-results
+    networks:
+      - typosquatting-net
+    depends_on:
+      - orchestrator-api
+    restart: unless-stopped
+
+  # === Who-Dat WHOIS/RDAP API ===
+  # Free WHOIS lookup service (github.com/Lissy93/who-dat)
+  # Port 8080 - Usage: GET http://localhost:8080/{domain}
+  who-dat:
+    image: lissy93/who-dat
+    container_name: who-dat
+    ports:
+      - "8080:8080"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     networks:
       - typosquatting-net
     restart: unless-stopped

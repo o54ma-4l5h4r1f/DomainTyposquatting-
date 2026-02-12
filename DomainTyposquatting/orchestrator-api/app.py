@@ -1,13 +1,22 @@
 """
 DNSTwist Orchestrator API - Container App
-Orchestrates domain scanning via dnstwist API and stores results locally.
+Central orchestrator for domain typosquatting detection.
+Manages a unified domain database that all services enrich.
+
+Services:
+- dnstwist-api (port 8000)  → scans & sends results via callback
+- whoisds-api  (port 8002)  → NRD keyword matches, pushed here
+- who-dat      (port 8080)  → WHOIS/RDAP lookups, called by orchestrator
 
 Endpoints:
 - POST /api/scan          - Submit domains for scanning
 - POST /api/callback      - Receive results from dnstwist API
+- POST /api/enrich        - Accept enrichment data from any service
+- POST /api/enrich/whois  - Trigger who-dat WHOIS lookup for domain(s)
 - GET  /api/status        - Get pending/running scans
-- GET  /api/results       - Get domains found for customer/month
+- GET  /api/results       - Get enriched domain data for customer
 - GET  /api/customers     - List all customers
+- GET  /api/domain/{domain} - Get full detail for one domain
 - GET  /api/health        - Health check
 """
 
@@ -28,68 +37,26 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="DNSTwist Orchestrator API",
-    description="Orchestrates domain scanning and stores results.",
-    version="1.0.0",
+    description="Central orchestrator with unified domain database. All services enrich one table.",
+    version="2.0.0",
 )
 
 # === Configuration ===
 DNSTWIST_API_URL = os.environ.get("DNSTWIST_API_URL", "http://dnstwist-api:8000")
 DNSTWIST_API_KEY = os.environ.get("DNSTWIST_API_KEY", "")
+WHO_DAT_URL = os.environ.get("WHO_DAT_URL", "http://who-dat:8080")
 DATA_DIR = os.environ.get("DATA_DIR", "/data/dnstwist-results")
-DB_PATH = os.environ.get("DB_PATH", "/data/dnstwist-results/tasks.db")
+DB_PATH = os.environ.get("DB_PATH", "/data/dnstwist-results/domains.db")
 
-# === Storage Helpers (Local Filesystem) ===
-
-
-def ensure_dir(path: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
-
-def read_file_text(file_path: str) -> str:
-    """Read text from file, return empty string if not exists."""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return ""
-
-
-def write_file_text(file_path: str, content: str):
-    """Write text to file (overwrite)."""
-    ensure_dir(file_path)
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def append_domains_to_file(
-    file_path: str, new_domains: list, exclude_set: set = None
-) -> int:
-    """Append new domains to file, skip duplicates, return count of new domains."""
-    existing_content = read_file_text(file_path)
-    existing_domains = set(d.strip() for d in existing_content.splitlines() if d.strip())
-
-    all_excluded = existing_domains.copy()
-    if exclude_set:
-        all_excluded.update(exclude_set)
-
-    new_unique = [d for d in new_domains if d not in all_excluded]
-
-    if new_unique:
-        all_domains = sorted(existing_domains | set(new_unique))
-        write_file_text(file_path, "\n".join(all_domains))
-
-    return len(new_unique)
-
-
-# === SQLite Task Tracking ===
+# === SQLite Unified Database ===
 
 
 def init_db():
-    """Initialize the SQLite database for task tracking."""
+    """Initialize the unified domain database."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
+        # --- Tasks table (scan tracking) ---
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 customer TEXT NOT NULL,
@@ -98,12 +65,59 @@ def init_db():
                 submitted_at TEXT NOT NULL,
                 completed_at TEXT
             )
-        """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer)"
-        )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+
+        # --- Unified domains table ---
+        # One row per unique domain. All services upsert into this table.
+        # Schema is flat for Cosmos DB compatibility.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS domains (
+                domain TEXT PRIMARY KEY,
+                customer TEXT,
+                original_domain TEXT,
+                source TEXT,
+                first_seen_at TEXT,
+                last_updated_at TEXT,
+
+                -- DNSTwist enrichment
+                fuzzer TEXT,
+                dns_a TEXT,
+                dns_aaaa TEXT,
+                dns_mx TEXT,
+                dns_ns TEXT,
+
+                -- WHOIS enrichment (dnstwist --whois or who-dat)
+                whois_registrar TEXT,
+                whois_created TEXT,
+                whois_updated TEXT,
+                whois_expires TEXT,
+                whois_registrant TEXT,
+                whois_country TEXT,
+
+                -- GeoIP enrichment
+                geoip_country TEXT,
+
+                -- Web enrichment
+                http_banner TEXT,
+                smtp_banner TEXT,
+                lsh_ssdeep TEXT,
+                lsh_tlsh TEXT,
+
+                -- MX check
+                mx_can_intercept INTEGER,
+
+                -- WhoisDS NRD enrichment
+                nrd_date TEXT,
+                nrd_keyword_matched TEXT,
+
+                -- Who-dat full RDAP JSON
+                whodat_raw TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
         conn.commit()
 
 
@@ -116,6 +130,55 @@ def get_db():
         conn.commit()
     finally:
         conn.close()
+
+
+def upsert_domain(domain_name: str, data: dict):
+    """
+    Insert or update a domain row.
+    Only non-None values in `data` will overwrite existing columns.
+    This allows different services to enrich the same row incrementally.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    data["last_updated_at"] = now
+
+    # All allowed columns (excluding the PK 'domain')
+    allowed_cols = [
+        "customer", "original_domain", "source", "first_seen_at", "last_updated_at",
+        "fuzzer", "dns_a", "dns_aaaa", "dns_mx", "dns_ns",
+        "whois_registrar", "whois_created", "whois_updated", "whois_expires",
+        "whois_registrant", "whois_country",
+        "geoip_country",
+        "http_banner", "smtp_banner", "lsh_ssdeep", "lsh_tlsh",
+        "mx_can_intercept",
+        "nrd_date", "nrd_keyword_matched",
+        "whodat_raw",
+    ]
+
+    # Filter to only columns that have non-None values
+    updates = {k: v for k, v in data.items() if k in allowed_cols and v is not None}
+
+    if not updates:
+        return
+
+    with get_db() as conn:
+        # Check if row exists
+        existing = conn.execute("SELECT domain FROM domains WHERE domain = ?", (domain_name,)).fetchone()
+
+        if existing:
+            # UPDATE only the provided columns
+            set_clause = ", ".join(f"{col} = ?" for col in updates.keys())
+            values = list(updates.values()) + [domain_name]
+            conn.execute(f"UPDATE domains SET {set_clause} WHERE domain = ?", values)
+        else:
+            # INSERT new row
+            updates["first_seen_at"] = now
+            cols = ["domain"] + list(updates.keys())
+            placeholders = ", ".join(["?"] * len(cols))
+            values = [domain_name] + list(updates.values())
+            conn.execute(f"INSERT INTO domains ({', '.join(cols)}) VALUES ({placeholders})", values)
+
+
+# === Task helpers ===
 
 
 def add_task(customer: str, domain: str, tracking_id: str):
@@ -145,17 +208,64 @@ def get_pending_tasks(customer: str = None) -> list:
         with get_db() as conn:
             if customer:
                 rows = conn.execute(
-                    "SELECT * FROM tasks WHERE customer = ? AND status = 'pending'",
-                    (customer,),
+                    "SELECT * FROM tasks WHERE customer = ? AND status = 'pending'", (customer,)
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    "SELECT * FROM tasks WHERE status = 'pending'"
-                ).fetchall()
+                rows = conn.execute("SELECT * FROM tasks WHERE status = 'pending'").fetchall()
             return [dict(r) for r in rows]
     except Exception as e:
         logger.error(f"Failed to get pending tasks: {e}")
         return []
+
+
+# === Who-dat enrichment helper ===
+
+
+async def enrich_with_whodat(domain_name: str, customer: str = None):
+    """Call who-dat to get WHOIS/RDAP data and upsert into domains table."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{WHO_DAT_URL}/{domain_name}")
+            if resp.status_code == 200:
+                whodat_data = resp.json()
+                enrichment = {"whodat_raw": json.dumps(whodat_data), "source": "who-dat"}
+                if customer:
+                    enrichment["customer"] = customer
+
+                # Extract key fields from RDAP/WHOIS response if available
+                if isinstance(whodat_data, dict):
+                    # Try common RDAP fields
+                    events = whodat_data.get("events", [])
+                    for event in events if isinstance(events, list) else []:
+                        action = event.get("eventAction", "")
+                        date = event.get("eventDate", "")
+                        if action == "registration":
+                            enrichment["whois_created"] = date
+                        elif action == "expiration":
+                            enrichment["whois_expires"] = date
+                        elif action == "last changed":
+                            enrichment["whois_updated"] = date
+
+                    # Registrant / entities
+                    entities = whodat_data.get("entities", [])
+                    for entity in entities if isinstance(entities, list) else []:
+                        roles = entity.get("roles", [])
+                        if "registrar" in roles:
+                            vcard = entity.get("vcardArray", [])
+                            if isinstance(vcard, list) and len(vcard) > 1:
+                                for field in vcard[1]:
+                                    if isinstance(field, list) and field[0] == "fn":
+                                        enrichment["whois_registrar"] = field[3] if len(field) > 3 else None
+
+                upsert_domain(domain_name, enrichment)
+                logger.info(f"Who-dat enrichment completed for {domain_name}")
+                return True
+            else:
+                logger.warning(f"Who-dat returned {resp.status_code} for {domain_name}")
+                return False
+    except Exception as e:
+        logger.error(f"Who-dat enrichment failed for {domain_name}: {e}")
+        return False
 
 
 # === Init DB on startup ===
@@ -163,7 +273,8 @@ def get_pending_tasks(customer: str = None) -> list:
 def startup():
     init_db()
     logger.info(f"Orchestrator started. dnstwist API: {DNSTWIST_API_URL}")
-    logger.info(f"Data directory: {DATA_DIR}")
+    logger.info(f"Who-dat URL: {WHO_DAT_URL}")
+    logger.info(f"Database: {DB_PATH}")
 
 
 # === Request Models ===
@@ -173,12 +284,29 @@ class ScanRequest(BaseModel):
     customer: str = Field(..., description="Customer name")
     domains: List[str] = Field(..., description="List of domains to scan")
     registered: bool = Field(True, description="Only show registered domains")
-    fuzzers: Optional[str] = Field(None, description="Comma-separated fuzzers")
-    whois: bool = Field(False, description="Perform WHOIS lookups")
+    fuzzers: Optional[str] = Field(None, description="Comma-separated fuzzers, or 'all'")
+    whois: bool = Field(False, description="Perform WHOIS lookups via dnstwist")
     geoip: bool = Field(False, description="GeoIP lookup")
-    callback_url: Optional[str] = Field(
-        None, description="Override callback URL"
+    mxcheck: bool = Field(False, description="Check MX for email interception")
+    banners: bool = Field(False, description="Grab HTTP/SMTP banners")
+    enrich_whois: bool = Field(True, description="Auto-enrich results with who-dat WHOIS lookup")
+    callback_url: Optional[str] = Field(None, description="Override callback URL")
+
+
+class EnrichRequest(BaseModel):
+    """Generic enrichment payload. Any service can push domain data."""
+    customer: Optional[str] = Field(None, description="Customer name")
+    domains: List[dict] = Field(
+        ...,
+        description="List of domain enrichment objects. Each must have 'domain' key.",
+        example=[{"domain": "examp1e.com", "nrd_date": "2026-02-10", "nrd_keyword_matched": "example"}],
     )
+    source: Optional[str] = Field(None, description="Source service name")
+
+
+class WhoisEnrichRequest(BaseModel):
+    domains: List[str] = Field(..., description="Domain names to enrich with WHOIS data")
+    customer: Optional[str] = Field(None, description="Customer name")
 
 
 # === API Endpoints ===
@@ -190,7 +318,31 @@ async def submit_scan(request: ScanRequest, req: Request):
     Submit domains for scanning.
 
     The orchestrator sends each domain to the dnstwist-api in async mode.
-    Results are received via the /api/callback endpoint.
+    Results come back via /api/callback.
+
+    **Example - scan with all fuzzers + WHOIS + GeoIP:**
+    ```json
+    {
+        "customer": "AcmeCorp",
+        "domains": ["example.com", "acme.com"],
+        "registered": true,
+        "fuzzers": "all",
+        "whois": true,
+        "geoip": true,
+        "mxcheck": true,
+        "banners": true,
+        "enrich_whois": true
+    }
+    ```
+
+    **Example - specific fuzzers (multi-select):**
+    ```json
+    {
+        "customer": "AcmeCorp",
+        "domains": ["example.com"],
+        "fuzzers": "homoglyph,bitsquatting,addition,tld-swap"
+    }
+    ```
     """
     if not DNSTWIST_API_URL:
         raise HTTPException(status_code=500, detail="DNSTWIST_API_URL not configured")
@@ -229,6 +381,13 @@ async def submit_scan(request: ScanRequest, req: Request):
                 payload["whois"] = True
             if request.geoip:
                 payload["geoip"] = True
+            if request.mxcheck:
+                payload["mxcheck"] = True
+            if request.banners:
+                payload["banners"] = True
+
+            # Store enrich_whois preference in metadata so callback knows
+            payload["metadata"] = {"enrich_whois": request.enrich_whois}
 
             try:
                 headers = {"Content-Type": "application/json"}
@@ -244,16 +403,12 @@ async def submit_scan(request: ScanRequest, req: Request):
                 if response.status_code == 200:
                     add_task(request.customer, domain, tracking_id)
                     submitted.append(domain)
-                    logger.info(
-                        f"Queued scan for {domain}, tracking_id: {tracking_id}"
-                    )
+                    logger.info(f"Queued scan for {domain}, tracking_id: {tracking_id}")
                 else:
-                    errors.append(
-                        {
-                            "domain": domain,
-                            "error": f"API returned {response.status_code}: {response.text}",
-                        }
-                    )
+                    errors.append({
+                        "domain": domain,
+                        "error": f"API returned {response.status_code}: {response.text}",
+                    })
 
             except Exception as e:
                 logger.error(f"Error submitting {domain}: {str(e)}")
@@ -277,10 +432,8 @@ async def submit_scan(request: ScanRequest, req: Request):
 async def receive_callback(req: Request):
     """
     Receive results from dnstwist API callback.
-
-    Stores results in local filesystem:
-    - /{customer}/{YYYY-MM}/domains.txt   - Domains found this month
-    - /{customer}/all_domains.txt         - All domains ever found (cumulative)
+    Each domain from the scan is upserted into the unified domains table
+    with all available enrichment data (DNS, WHOIS, GeoIP, banners, etc.).
     """
     logger.info("Callback received from dnstwist API")
 
@@ -293,83 +446,177 @@ async def receive_callback(req: Request):
     tracking_id = body.get("tracking_id")
     source_domain = body.get("domain")
     results = body.get("results", [])
-    timestamp = body.get("timestamp", datetime.now(timezone.utc).isoformat())
+    metadata = body.get("metadata", {})
+    enrich_whois = metadata.get("enrich_whois", False) if isinstance(metadata, dict) else False
 
     if not customer:
         raise HTTPException(status_code=400, detail="customer field is required")
 
-    # Extract domain names from results (skip original)
-    domains_found = []
+    domains_stored = 0
+    domains_to_enrich = []
+
     for result in results:
         fuzzer = result.get("fuzzer", "")
-        domain = result.get("domain", "")
-        if fuzzer == "*original" or domain == source_domain:
-            continue
-        if domain:
-            domains_found.append(domain)
+        domain_name = result.get("domain", "")
 
-    if not domains_found:
-        logger.info(f"No lookalike domains found for {source_domain}")
-        if tracking_id:
-            complete_task(customer, tracking_id)
-        return {
-            "status": "ok",
-            "message": "No lookalike domains found",
+        # Skip the original domain entry
+        if fuzzer == "*original" or domain_name == source_domain:
+            continue
+        if not domain_name:
+            continue
+
+        # Build enrichment data from dnstwist result
+        enrichment = {
             "customer": customer,
-            "source_domain": source_domain,
+            "original_domain": source_domain,
+            "source": "dnstwist",
+            "fuzzer": fuzzer,
         }
 
-    # Get current month
-    try:
-        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    except Exception:
-        dt = datetime.now(timezone.utc)
+        # DNS records (store as JSON strings for lists)
+        dns_a = result.get("dns_a")
+        if dns_a:
+            enrichment["dns_a"] = json.dumps(dns_a) if isinstance(dns_a, list) else str(dns_a)
+        dns_aaaa = result.get("dns_aaaa")
+        if dns_aaaa:
+            enrichment["dns_aaaa"] = json.dumps(dns_aaaa) if isinstance(dns_aaaa, list) else str(dns_aaaa)
+        dns_mx = result.get("dns_mx")
+        if dns_mx:
+            enrichment["dns_mx"] = json.dumps(dns_mx) if isinstance(dns_mx, list) else str(dns_mx)
+        dns_ns = result.get("dns_ns")
+        if dns_ns:
+            enrichment["dns_ns"] = json.dumps(dns_ns) if isinstance(dns_ns, list) else str(dns_ns)
 
-    month_folder = dt.strftime("%Y-%m")
+        # WHOIS data from dnstwist --whois
+        whois_created = result.get("whois_created")
+        if whois_created:
+            enrichment["whois_created"] = whois_created
+        whois_updated = result.get("whois_updated")
+        if whois_updated:
+            enrichment["whois_updated"] = whois_updated
+        whois_registrar = result.get("whois_registrar")
+        if whois_registrar:
+            enrichment["whois_registrar"] = whois_registrar
 
-    # File paths
-    month_file = os.path.join(DATA_DIR, customer, month_folder, "domains.txt")
-    all_time_file = os.path.join(DATA_DIR, customer, "all_domains.txt")
+        # GeoIP
+        geoip = result.get("geoip")
+        if geoip:
+            enrichment["geoip_country"] = geoip
 
-    # Read existing all-time domains for deduplication
-    all_time_content = read_file_text(all_time_file)
-    existing_all_time = set(
-        d.strip() for d in all_time_content.splitlines() if d.strip()
-    )
+        # Banners
+        http_banner = result.get("banner_http")
+        if http_banner:
+            enrichment["http_banner"] = http_banner
+        smtp_banner = result.get("banner_smtp")
+        if smtp_banner:
+            enrichment["smtp_banner"] = smtp_banner
 
-    # Append to monthly file
-    new_monthly = append_domains_to_file(
-        month_file, domains_found, exclude_set=existing_all_time
-    )
+        # Fuzzy hashing
+        ssdeep = result.get("ssdeep")
+        if ssdeep:
+            enrichment["lsh_ssdeep"] = ssdeep
+        tlsh = result.get("tlsh")
+        if tlsh:
+            enrichment["lsh_tlsh"] = tlsh
 
-    # Append to all-time file
-    new_alltime = append_domains_to_file(all_time_file, domains_found)
+        # MX interception check
+        mx_spy = result.get("mx_spy")
+        if mx_spy is not None:
+            enrichment["mx_can_intercept"] = 1 if mx_spy else 0
 
-    logger.info(f"Stored {new_monthly} new domains for {customer}/{month_folder}")
-    logger.info(f"Added {new_alltime} new unique domains to all-time list")
+        upsert_domain(domain_name, enrichment)
+        domains_stored += 1
 
+        if enrich_whois:
+            domains_to_enrich.append(domain_name)
+
+    logger.info(f"Stored {domains_stored} domains for {customer} (source: {source_domain})")
+
+    # Complete the task
     if tracking_id:
         complete_task(customer, tracking_id)
+
+    # Auto-enrich with who-dat in background (non-blocking, best effort)
+    if domains_to_enrich:
+        import asyncio
+
+        async def _enrich_batch():
+            for d in domains_to_enrich[:50]:  # cap at 50 to avoid overload
+                await enrich_with_whodat(d, customer)
+
+        asyncio.ensure_future(_enrich_batch())
 
     return {
         "status": "ok",
         "customer": customer,
         "source_domain": source_domain,
-        "domains_received": len(domains_found),
-        "new_domains_this_month": new_monthly,
-        "new_domains_all_time": new_alltime,
-        "month": month_folder,
+        "domains_stored": domains_stored,
+        "whois_enrichment_queued": len(domains_to_enrich) if enrich_whois else 0,
     }
+
+
+@app.post("/api/enrich", tags=["Enrichment"])
+async def enrich_domains(request: EnrichRequest):
+    """
+    Generic enrichment endpoint. Any service can push domain data here.
+
+    Used by whoisds-api to push NRD keyword matches, or any external source.
+
+    **Example from whoisds-api:**
+    ```json
+    {
+        "customer": "AcmeCorp",
+        "source": "whoisds",
+        "domains": [
+            {"domain": "acmecorp-login.com", "nrd_date": "2026-02-10", "nrd_keyword_matched": "acmecorp"},
+            {"domain": "acme-secure.com", "nrd_date": "2026-02-10", "nrd_keyword_matched": "acme"}
+        ]
+    }
+    ```
+    """
+    count = 0
+    for item in request.domains:
+        domain_name = item.get("domain")
+        if not domain_name:
+            continue
+
+        enrichment = {k: v for k, v in item.items() if k != "domain"}
+        if request.customer:
+            enrichment["customer"] = request.customer
+        if request.source:
+            enrichment["source"] = request.source
+
+        upsert_domain(domain_name, enrichment)
+        count += 1
+
+    return {"status": "ok", "domains_enriched": count}
+
+
+@app.post("/api/enrich/whois", tags=["Enrichment"])
+async def enrich_whois(request: WhoisEnrichRequest):
+    """
+    Trigger who-dat WHOIS/RDAP lookup for specific domains.
+    Results are stored in the unified domains table.
+
+    **Example:**
+    ```json
+    {
+        "domains": ["examp1e.com", "exampl3.com"],
+        "customer": "AcmeCorp"
+    }
+    ```
+    """
+    results = []
+    for domain_name in request.domains:
+        success = await enrich_with_whodat(domain_name, request.customer)
+        results.append({"domain": domain_name, "enriched": success})
+
+    return {"status": "ok", "results": results}
 
 
 @app.get("/api/status", tags=["Status"])
 async def get_status(customer: Optional[str] = None):
-    """
-    Get pending/running scan tasks.
-
-    Query params:
-    - customer (optional): Filter by customer name
-    """
+    """Get pending/running scan tasks."""
     pending_tasks = get_pending_tasks(customer)
 
     by_customer = {}
@@ -377,17 +624,14 @@ async def get_status(customer: Optional[str] = None):
         cust = task.get("customer", "unknown")
         if cust not in by_customer:
             by_customer[cust] = []
-        by_customer[cust].append(
-            {
-                "domain": task.get("domain"),
-                "tracking_id": task.get("id"),
-                "submitted_at": task.get("submitted_at"),
-                "status": task.get("status"),
-            }
-        )
+        by_customer[cust].append({
+            "domain": task.get("domain"),
+            "tracking_id": task.get("id"),
+            "submitted_at": task.get("submitted_at"),
+            "status": task.get("status"),
+        })
 
     result = {"pending_count": len(pending_tasks), "by_customer": by_customer}
-
     if customer:
         result["filter"] = {"customer": customer}
 
@@ -397,59 +641,100 @@ async def get_status(customer: Optional[str] = None):
 @app.get("/api/results", tags=["Results"])
 async def get_results(
     customer: str,
-    month: Optional[str] = None,
-    all_time: bool = False,
+    original_domain: Optional[str] = None,
+    source: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
 ):
     """
-    Get domains found for a customer.
+    Get enriched domain data for a customer from the unified database.
 
     Query params:
     - customer (required): Customer name
-    - month (optional): Month in YYYY-MM format (default: current month)
-    - all_time (optional): If true, return all-time domains
+    - original_domain (optional): Filter by the domain that was scanned
+    - source (optional): Filter by source (dnstwist, whoisds, who-dat)
+    - limit / offset: Pagination
     """
-    if all_time:
-        file_path = os.path.join(DATA_DIR, customer, "all_domains.txt")
-        period = "all_time"
-    else:
-        if not month:
-            month = datetime.now(timezone.utc).strftime("%Y-%m")
-        file_path = os.path.join(DATA_DIR, customer, month, "domains.txt")
-        period = month
+    conditions = ["customer = ?"]
+    params: list = [customer]
 
-    content = read_file_text(file_path)
-    domains = [d.strip() for d in content.splitlines() if d.strip()]
+    if original_domain:
+        conditions.append("original_domain = ?")
+        params.append(original_domain)
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+
+    where_clause = " AND ".join(conditions)
+
+    with get_db() as conn:
+        count_row = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM domains WHERE {where_clause}", params
+        ).fetchone()
+        total = count_row["cnt"] if count_row else 0
+
+        rows = conn.execute(
+            f"SELECT * FROM domains WHERE {where_clause} ORDER BY last_updated_at DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        domains = [dict(r) for r in rows]
 
     return {
         "customer": customer,
-        "period": period,
-        "domains_count": len(domains),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
         "domains": domains,
     }
 
 
 @app.get("/api/customers", tags=["Customers"])
 async def list_customers():
-    """List all customers with stored results."""
-    customers = set()
-    if os.path.exists(DATA_DIR):
-        for entry in os.listdir(DATA_DIR):
-            full_path = os.path.join(DATA_DIR, entry)
-            if os.path.isdir(full_path):
-                customers.add(entry)
+    """List all customers with domain counts."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT customer, COUNT(*) as domain_count FROM domains WHERE customer IS NOT NULL GROUP BY customer ORDER BY customer"
+        ).fetchall()
 
-    return {"customers": sorted(list(customers)), "count": len(customers)}
+    customers = [{"customer": r["customer"], "domain_count": r["domain_count"]} for r in rows]
+
+    return {
+        "customers": customers,
+        "count": len(customers),
+    }
+
+
+@app.get("/api/domain/{domain}", tags=["Results"])
+async def get_domain_detail(domain: str):
+    """Get full enrichment detail for a single domain."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM domains WHERE domain = ?", (domain,)).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Domain '{domain}' not found")
+
+    return dict(row)
 
 
 @app.get("/api/health", tags=["Health"])
 async def health_check():
     """Health check endpoint."""
+    domain_count = 0
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM domains").fetchone()
+            domain_count = row["cnt"] if row else 0
+    except Exception:
+        pass
+
     return {
         "status": "ok",
         "service": "dnstwist-orchestrator",
+        "version": "2.0.0",
         "dnstwist_api_url": DNSTWIST_API_URL,
-        "data_dir": DATA_DIR,
+        "who_dat_url": WHO_DAT_URL,
         "db_path": DB_PATH,
+        "total_domains_in_db": domain_count,
     }
 
 
@@ -459,6 +744,6 @@ async def root():
     return {
         "status": "ok",
         "service": "dnstwist-orchestrator",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs",
     }

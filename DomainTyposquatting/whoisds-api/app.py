@@ -1,6 +1,7 @@
 """
 WhoisDS NRD API - Container App
 Downloads Newly Registered Domains (NRD) from WhoisDS and searches for brand keywords.
+Matches are pushed to the orchestrator's unified domain database.
 
 Endpoints:
 - POST /api/download_nrd    - Download NRD file from WhoisDS
@@ -17,6 +18,7 @@ import logging
 import json
 import os
 import requests
+import httpx
 import zipfile
 import tempfile
 from datetime import datetime
@@ -27,11 +29,12 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="WhoisDS NRD API",
     description="Download and search Newly Registered Domains from WhoisDS.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 # === Configuration ===
 DATA_DIR = os.environ.get("DATA_DIR", "/data/whoisds")
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://orchestrator-api:8001")
 NRD_FOLDER = "nrd-files"
 RESULTS_FOLDER = "matched-results"
 
@@ -70,6 +73,36 @@ def write_file(file_path: str, content: str):
         f.write(content)
 
 
+async def push_to_orchestrator(customer: str, matches: list, date: str):
+    """Push matched domains to orchestrator's unified domain database."""
+    if not ORCHESTRATOR_URL or not matches:
+        return
+
+    domains_payload = []
+    for match in matches:
+        domains_payload.append({
+            "domain": match["content"],
+            "nrd_date": date,
+            "nrd_keyword_matched": match.get("matched_keyword", ""),
+        })
+
+    payload = {
+        "customer": customer,
+        "source": "whoisds",
+        "domains": domains_payload,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{ORCHESTRATOR_URL}/api/enrich", json=payload)
+            if resp.status_code == 200:
+                logger.info(f"Pushed {len(domains_payload)} matches to orchestrator for {customer}")
+            else:
+                logger.warning(f"Orchestrator returned {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.error(f"Failed to push matches to orchestrator: {e}")
+
+
 # === Request Models ===
 
 
@@ -93,6 +126,7 @@ def startup():
     ensure_dir(get_nrd_dir())
     ensure_dir(get_results_dir())
     logger.info(f"WhoisDS API started. Data directory: {DATA_DIR}")
+    logger.info(f"Orchestrator URL: {ORCHESTRATOR_URL}")
 
 
 # === API Endpoints ===
@@ -202,6 +236,7 @@ async def download_nrd(request: DownloadNRDRequest):
 async def search_keywords(request: SearchKeywordsRequest):
     """
     Search for keywords in NRD file and store results.
+    Matches are automatically pushed to the orchestrator's unified domain database.
     """
     logger.info("Search keywords request received")
 
@@ -265,7 +300,7 @@ async def search_keywords(request: SearchKeywordsRequest):
         "timestamp": datetime.utcnow().isoformat(),
     }
 
-    # Store results
+    # Store results locally
     month_folder = date_obj.strftime("%Y-%m")
     customer_safe = request.Customer.replace(" ", "_").replace("/", "-")
 
@@ -277,6 +312,9 @@ async def search_keywords(request: SearchKeywordsRequest):
     write_file(results_file, json.dumps(results, indent=2))
     logger.info(f"Results stored at: {results_file}")
 
+    # Push matches to orchestrator unified domain DB
+    await push_to_orchestrator(request.Customer, matches, request.date)
+
     return {
         "status": "success",
         "customer": request.Customer,
@@ -285,6 +323,7 @@ async def search_keywords(request: SearchKeywordsRequest):
         "total_matches": len(matches),
         "matches": matches,
         "results_stored_at": results_file,
+        "pushed_to_orchestrator": len(matches),
     }
 
 
@@ -354,6 +393,7 @@ async def health_check():
         "status": "ok",
         "service": "whoisds-nrd-api",
         "data_dir": DATA_DIR,
+        "orchestrator_url": ORCHESTRATOR_URL,
         "folders": {"nrd_files": NRD_FOLDER, "results": RESULTS_FOLDER},
     }
 
@@ -364,6 +404,6 @@ async def root():
     return {
         "status": "ok",
         "service": "whoisds-nrd-api",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "docs": "/docs",
     }
