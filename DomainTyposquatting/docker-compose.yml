@@ -71,13 +71,16 @@ services:
     restart: unless-stopped
 
   # === Who-Dat WHOIS/RDAP API ===
-  # Free WHOIS lookup service (github.com/Lissy93/who-dat)
+  # Built from local source (Go app with WHOIS + RDAP fallback)
   # Port 8080 - Usage: GET http://localhost:8080/{domain}
+  #           - Multi:  GET http://localhost:8080/multi?domains=a.com,b.com
   who-dat:
-    image: lissy93/who-dat
+    build: ./who-dat
     container_name: who-dat
     ports:
       - "8080:8080"
+    environment:
+      - PORT=8080
     dns:
       - 8.8.8.8
       - 8.8.4.4

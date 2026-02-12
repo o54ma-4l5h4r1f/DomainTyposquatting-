@@ -222,40 +222,56 @@ def get_pending_tasks(customer: str = None) -> list:
 
 
 async def enrich_with_whodat(domain_name: str, customer: str = None):
-    """Call who-dat to get WHOIS/RDAP data and upsert into domains table."""
+    """
+    Call local who-dat service to get WHOIS/RDAP data and upsert into domains table.
+
+    who-dat response format (whoisparser.WhoisInfo):
+    {
+      "domain": {
+        "created_date": "...", "updated_date": "...", "expiration_date": "...",
+        "name_servers": [...], "status": [...], "whois_server": "..."
+      },
+      "registrar": { "name": "...", "organization": "...", ... },
+      "registrant": { "name": "...", "country": "...", ... },
+      "administrative": { ... },
+      "technical": { ... }
+    }
+    """
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"{WHO_DAT_URL}/{domain_name}")
             if resp.status_code == 200:
                 whodat_data = resp.json()
-                enrichment = {"whodat_raw": json.dumps(whodat_data), "source": "who-dat"}
+                enrichment = {"whodat_raw": json.dumps(whodat_data)}
                 if customer:
                     enrichment["customer"] = customer
 
-                # Extract key fields from RDAP/WHOIS response if available
                 if isinstance(whodat_data, dict):
-                    # Try common RDAP fields
-                    events = whodat_data.get("events", [])
-                    for event in events if isinstance(events, list) else []:
-                        action = event.get("eventAction", "")
-                        date = event.get("eventDate", "")
-                        if action == "registration":
-                            enrichment["whois_created"] = date
-                        elif action == "expiration":
-                            enrichment["whois_expires"] = date
-                        elif action == "last changed":
-                            enrichment["whois_updated"] = date
+                    # Extract domain dates
+                    domain_info = whodat_data.get("domain") or {}
+                    if isinstance(domain_info, dict):
+                        if domain_info.get("created_date"):
+                            enrichment["whois_created"] = domain_info["created_date"]
+                        if domain_info.get("updated_date"):
+                            enrichment["whois_updated"] = domain_info["updated_date"]
+                        if domain_info.get("expiration_date"):
+                            enrichment["whois_expires"] = domain_info["expiration_date"]
 
-                    # Registrant / entities
-                    entities = whodat_data.get("entities", [])
-                    for entity in entities if isinstance(entities, list) else []:
-                        roles = entity.get("roles", [])
-                        if "registrar" in roles:
-                            vcard = entity.get("vcardArray", [])
-                            if isinstance(vcard, list) and len(vcard) > 1:
-                                for field in vcard[1]:
-                                    if isinstance(field, list) and field[0] == "fn":
-                                        enrichment["whois_registrar"] = field[3] if len(field) > 3 else None
+                    # Extract registrar info
+                    registrar = whodat_data.get("registrar") or {}
+                    if isinstance(registrar, dict):
+                        registrar_name = registrar.get("name") or registrar.get("organization")
+                        if registrar_name:
+                            enrichment["whois_registrar"] = registrar_name
+
+                    # Extract registrant info
+                    registrant = whodat_data.get("registrant") or {}
+                    if isinstance(registrant, dict):
+                        registrant_name = registrant.get("name") or registrant.get("organization")
+                        if registrant_name:
+                            enrichment["whois_registrant"] = registrant_name
+                        if registrant.get("country"):
+                            enrichment["whois_country"] = registrant["country"]
 
                 upsert_domain(domain_name, enrichment)
                 logger.info(f"Who-dat enrichment completed for {domain_name}")
