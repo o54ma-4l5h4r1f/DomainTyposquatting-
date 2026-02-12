@@ -1,0 +1,29 @@
+version: '3'
+services:
+  dnstwist:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # === API Authentication (for calling THIS API) ===
+      - API_KEY=your-secret-api-key-here        # Required to call /scan endpoints
+      
+      # === Callback/Webhook Configuration ===
+      - CALLBACK_URL=                            # URL to forward results to (when forward=true)
+      - CALLBACK_METHOD=POST                     # HTTP method: POST or PUT
+      
+      # === Callback Authentication (choose ONE method) ===
+      # Option 1: API Key
+      - CALLBACK_API_KEY=                        # API key value
+      - CALLBACK_API_KEY_HEADER=X-API-Key        # Header name (default: X-API-Key)
+      
+      # Option 2: Bearer Token
+      - CALLBACK_BEARER_TOKEN=                   # Bearer token (sent as: Authorization: Bearer xxx)
+      
+      # Option 3: Basic Auth
+      - CALLBACK_BASIC_USER=                     # Username
+      - CALLBACK_BASIC_PASS=                     # Password
+      
+      # Option 4: Custom Header
+      - CALLBACK_CUSTOM_HEADER=                  # Custom header name
+      - CALLBACK_CUSTOM_VALUE=                   # Custom header value

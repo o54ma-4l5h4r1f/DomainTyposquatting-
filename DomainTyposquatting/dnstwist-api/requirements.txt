@@ -1,0 +1,5 @@
+dnstwist[full]
+fastapi
+uvicorn[standard]
+gunicorn
+httpx

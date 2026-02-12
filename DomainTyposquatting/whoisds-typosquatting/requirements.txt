@@ -1,0 +1,17 @@
+# Azure Functions
+azure-functions
+
+# Azure Storage
+azure-storage-blob>=12.19.0
+
+# HTTP requests
+requests>=2.31.0
+
+# Standard libraries (included in Python, listed for reference)
+# zipfile
+# io
+# os
+# datetime
+# json
+# typing
+# logging
