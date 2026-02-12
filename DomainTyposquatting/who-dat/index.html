@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Required meta tags -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="description" content="Who Dat - Free and Open Source WHOIS Lookup API. Easily find the owner of any domain." />
+    <meta name="keywords" content="WHOIS, API, Domain Lookup, Free WHOIS API, Open Source, Domain Owner, DNS Lookup" />
+    <meta name="author" content="Alicia Sykes" />
+
+    <!-- Open Graph / Facebook Meta Tags -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://who-dat.as93.net/" />
+    <meta property="og:title" content="Who Dat - Free & Open Source WHOIS Lookup API" />
+    <meta property="og:description" content="Who Dat - Free and Open Source WHOIS Lookup API. Find the owner of any domain easily." />
+    <meta property="og:image" content="/who-dat.png" />
+
+    <!-- Twitter Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta property="twitter:domain" content="who-dat.as93.net" />
+    <meta property="twitter:url" content="https://who-dat.as93.net/" />
+    <meta name="twitter:title" content="Who Dat - Free & Open Source WHOIS Lookup API" />
+    <meta name="twitter:description" content="Who Dat - Free and Open Source WHOIS Lookup API. Find the owner of any domain easily." />
+    <meta name="twitter:image" content="/who-dat.png" />
+
+    <link rel="icon" type="image/svg+xml" href="/who-dat-square.png" />
+    <title>Who Dat - Free & Open Source WHOIS Lookup API</title>
+    <script defer data-domain="who-dat.as93.net" src="https://no-track.as93.net/js/script.js"></script>
+
+    <style>html {background: #000; color: #FFF; } </style>
+  </head>
+  <body>
+
+    <!-- Page title and navigation -->
+    <header>
+      <div class="left">
+        <h1>Who Dat?</h1>
+        <p>Free & Open Source WHOIS Lookup Service</p>
+      </div>
+      <nav>
+        <a href="https://who-dat.as93.net/docs.html">Public API</a>
+        <a href="https://github.com/Lissy93/who-dat#deployment">Self-Hosting</a>
+        <a href="https://github.com/Lissy93/who-dat">GitHub</a>
+      </nav>
+    </header>
+
+    <!-- WhoIs Lookup -->
+    <section class="lookup" x-data="whoisLookup()">
+      <h2>WHOIS Lookup</h2>
+      <form @submit.prevent="lookup">
+        <input type="text" x-model="domain" placeholder="Enter a domain name" />
+        <button type="submit">Lookup</button>
+      </form>
+      <div x-show="result">
+        <h3>Results</h3>
+        <button class="small toggle" @click="toggleFormat" x-text="showFormatted ? 'Show Raw' : 'Show Formatted'"></button>
+          <div x-show="showFormatted && formattedResult">
+            <template x-for="section in (formattedResult || [])" class="result-section">
+              <div>
+              <h4 x-text="section.lbl"></h4>
+              <ul class="row">
+                <template x-for="item in section.val">
+                  <li>
+                    <span class="row-lbl" x-text="item.lbl"></span>
+                    <template x-if="Array.isArray(item.val)">
+                      <span class="row-val row-val-list">
+                        <template x-for="subItem in item.val">
+                          <span class="sub-item" x-text="subItem"></span>
+                        </template>
+                      </span>
+                      <span class="row-val row-val-list" x-text="item.val.join(', ')"></span>
+                    </template>
+                    <template x-if="!Array.isArray(item.val)">
+                      <span class="row-val" x-text="item.val"></span>
+                    </template>
+                  </li>
+                </template>
+              </ul>
+            </div>
+            </template>
+          </div>
+          <pre x-show="!showFormatted" x-text="result"></pre>
+      </div>
+      <div x-show="error" style="color: red;">
+        <p x-text="error"></p>
+      </div>
+    </section>
+
+
+    <!-- API Docs -->
+    <section class="api">
+      <h2>Public API</h2>
+      <p>
+        Our public API is free to use without needing any authentication or CORS headers.
+      </p>
+      <code>curl https://who-dat.as93.net/example.com</code>
+      <p>
+        <a href="https://github.com/Lissy93/who-dat#api-usage">View API Documentation</a>
+      </p>
+    </section>
+
+    <!-- Self-Hosting Docs -->
+    <section class="host">
+      <h2>Self-Hosting</h2>
+      <p>
+        Self-hosting Who Dat is easy!
+        Either pull the Docker image, use the 1-click Vercel deploy, or the download or build the binary yourself.
+      </p>
+      <code>docker run -p 8080:8080 lissy93/who-dat</code>
+      <p>Or</p>
+      <a><button class="small">1-Click Deploy to Vercel</button></a>
+      <p>
+        <a href="https://github.com/Lissy93/who-dat#deployment">View Self-Hosting Documentation</a>
+      </p>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      Built with ❤️ by <a href="https://aliciasykes.com">Alicia Sykes</a>.
+      Licensed under <a href="https://github.com/lissy93/who-dat/blob/HEAD/LICENSE">MIT</a> © 2024.
+      Source available on <a href="https://github.com/lissy93/who-dat">GitHub</a>.
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

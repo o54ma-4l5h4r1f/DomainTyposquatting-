@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "github": {
+    "enabled": true,
+    "silent": true
+  },
+  "builds": [
+    {
+      "src": "api/**/*.go",
+      "use": "@vercel/go"
+    },
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {"distDir": "dist"}
+    }
+  ],
+  "routes": [
+    {
+      "handle": "filesystem"
+    },
+    { "src": "/ping", "dest": "/api/ping.go" },
+    { "src": "/multi:domains*", "dest": "/api/multi.go" },
+    { "src": "/(.*)", "dest": "/api/index.go" }
+  ]
+}
