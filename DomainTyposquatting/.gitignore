@@ -19,6 +19,9 @@ deployment-output.json
 .DS_Store
 Thumbs.db
 
+# DLP scanner artifacts
+*:sec.endpointdlp
+
 # IDE
 .vscode/
 .idea/
