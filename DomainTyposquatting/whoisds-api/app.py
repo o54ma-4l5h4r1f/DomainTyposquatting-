@@ -290,8 +290,9 @@ def enrich_batch_background(domains: list, customer: str):
 
 
 def pass_to_dnstwist_background(
-    domains: list, customer: str, enrich_whois: bool,
-    registered: bool = True, fuzzers: str | None = "bitsquatting",
+    domains: list, customer: str,
+    registered: bool = True, enrich_whois: bool = False,
+    fuzzers: str | None = "bitsquatting",
 ):
     logger.info(f"Sending {len(domains)} NRD domains to dnstwist scan ({customer})...")
     try:
@@ -331,10 +332,12 @@ class SearchKeywordsRequest(BaseModel):
     Customer: str = Field(..., description="Customer name")
     Keywords: List[str] = Field(..., description="Keywords to search for")
     date: str = Field(..., description="Date of NRD file (YYYY-MM-DD)")
-    enrich_whois: bool = Field(False, description="Enrich matched domains with who-dat WHOIS/RDAP")
-    pass_to_dnstwist: bool = Field(False, description="Send matched domains to dnstwist for scanning")
-    registered: bool = Field(True, description="Only show registered domains (used when pass_to_dnstwist is true)")
-    fuzzers: Optional[str] = Field("bitsquatting", description="Comma-separated fuzzers for dnstwist (used when pass_to_dnstwist is true)")
+    enrich_whois: bool = Field(False, description="Enrich NRD matches with who-dat WHOIS/RDAP")
+    pass_to_dnstwist: bool = Field(False, description="Send matched NRD domains to dnstwist for scanning")
+    # dnstwist parameters — only used when pass_to_dnstwist is true
+    dnstwist_registered: bool = Field(True, description="dnstwist: only store fuzzed domains confirmed registered via WHOIS")
+    dnstwist_enrich_whois: bool = Field(False, description="dnstwist: enrich fuzzed domains with WHOIS data")
+    dnstwist_fuzzers: Optional[str] = Field("bitsquatting", description="dnstwist: comma-separated fuzzers")
 
 
 # === Endpoints ===
@@ -349,7 +352,8 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
     ```json
     {"Customer": "Yanal", "Keywords": ["yanal"], "date": "2026-02-13",
      "enrich_whois": true, "pass_to_dnstwist": true,
-     "registered": true, "fuzzers": "bitsquatting"}
+     "dnstwist_registered": true, "dnstwist_enrich_whois": false,
+     "dnstwist_fuzzers": "bitsquatting"}
     ```
     """
     try:
@@ -379,58 +383,30 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
                 matches.append({"domain": line_stripped, "keyword": keyword})
                 break
 
-    # Write to DB — gate on registered
+    # Write all NRD matches to DB (NRDs are registered by definition)
     matched_domains = []
-    if request.registered:
-        # Only store NRD domains confirmed registered via WHOIS
-        for match in matches:
-            domain_name = match["domain"]
-            nrd_data = {
-                "customer": request.Customer,
-                "source": "whoisds",
-                "nrd_date": request.date,
-                "nrd_keyword_matched": match["keyword"],
-            }
-            whois_data = _fetch_whodat(domain_name, request.Customer)
-            if whois_data:
-                if request.enrich_whois:
-                    merged = {**nrd_data, **whois_data}
-                    upsert_domain(domain_name, merged)
-                    logger.info(f"[nrd+whois] {domain_name}: stored (scan + WHOIS merged)")
-                else:
-                    upsert_domain(domain_name, nrd_data)
-                    logger.info(f"[nrd] {domain_name}: stored (scan only, registered)")
-                matched_domains.append(domain_name)
-            else:
-                logger.info(f"[nrd] {domain_name}: skipped (not registered)")
-    else:
-        # Store all matched NRD domains directly
-        for match in matches:
-            upsert_domain(match["domain"], {
-                "customer": request.Customer,
-                "source": "whoisds",
-                "nrd_date": request.date,
-                "nrd_keyword_matched": match["keyword"],
-            })
-            matched_domains.append(match["domain"])
+    for match in matches:
+        upsert_domain(match["domain"], {
+            "customer": request.Customer,
+            "source": "whoisds",
+            "nrd_date": request.date,
+            "nrd_keyword_matched": match["keyword"],
+        })
+        matched_domains.append(match["domain"])
 
-        # Background WHOIS enrichment only when not already done inline
-        if request.enrich_whois and matched_domains:
-            background_tasks.add_task(enrich_batch_background, matched_domains, request.Customer)
+    logger.info(f"[nrd] {len(matched_domains)} domains stored for {request.Customer} ({request.date})")
 
-    logger.info(f"NRD search: {len(matched_domains)} stored for {request.Customer} ({request.date})")
+    # Enrich NRD records with WHOIS if requested
+    if request.enrich_whois and matched_domains:
+        background_tasks.add_task(enrich_batch_background, matched_domains, request.Customer)
 
+    # Pass to dnstwist with its own registered/enrich_whois/fuzzers params
     if request.pass_to_dnstwist and matched_domains:
         background_tasks.add_task(
             pass_to_dnstwist_background, matched_domains, request.Customer,
-            request.enrich_whois, request.registered, request.fuzzers,
+            request.dnstwist_registered, request.dnstwist_enrich_whois,
+            request.dnstwist_fuzzers,
         )
-
-    whois_status = "skipped"
-    if request.registered:
-        whois_status = "inline (registered gate)" if not request.enrich_whois else "inline (merged)"
-    elif request.enrich_whois and matched_domains:
-        whois_status = "queued"
 
     return {
         "status": "success",
@@ -440,7 +416,7 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
         "total_nrd_matches": len(matches),
         "stored_in_db": len(matched_domains),
         "matches": matches,
-        "whois_enrichment": whois_status,
+        "nrd_whois_enrichment": "queued" if request.enrich_whois and matched_domains else "skipped",
         "dnstwist_scan": "queued" if request.pass_to_dnstwist and matched_domains else "skipped",
     }
 
