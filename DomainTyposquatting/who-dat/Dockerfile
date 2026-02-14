@@ -2,9 +2,11 @@
 FROM node:latest AS frontend-builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm install && find node_modules -type f -path "*/bin/*" -exec chmod +x {} +
+RUN npm install
 COPY ./ ./
-RUN node ./node_modules/typescript/bin/tsc && node ./node_modules/vite/bin/vite.js build
+RUN find node_modules -type f -path "*/bin/*" -exec chmod +x {} + && \
+    node ./node_modules/typescript/bin/tsc && \
+    node ./node_modules/vite/bin/vite.js build
 
 # Stage 2: Build the Go application
 FROM golang:latest AS go-builder
