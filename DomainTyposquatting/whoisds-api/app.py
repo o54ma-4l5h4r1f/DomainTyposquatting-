@@ -229,44 +229,87 @@ def download_nrd(date: str) -> str:
 # === Who-dat enrichment ===
 
 
-def _fetch_whodat(domain_name: str, customer: str = None) -> dict | None:
-    """Fetch WHOIS from who-dat and return parsed enrichment dict, or None."""
+def _call_whodat(domain_name: str) -> dict | None:
+    """Call who-dat and return the raw JSON response, or None on failure."""
     try:
         with httpx.Client(timeout=15.0) as client:
             resp = client.get(f"{WHO_DAT_URL}/{domain_name}")
             if resp.status_code != 200:
                 return None
-
-            whodat_data = resp.json()
-            enrichment = {"whodat_raw": json.dumps(whodat_data)}
-            if customer:
-                enrichment["customer"] = customer
-
-            if isinstance(whodat_data, dict):
-                d = whodat_data.get("domain") or {}
-                if isinstance(d, dict):
-                    for src, dst in [("created_date", "whois_created"), ("updated_date", "whois_updated"), ("expiration_date", "whois_expires")]:
-                        if d.get(src):
-                            enrichment[dst] = d[src]
-
-                reg = whodat_data.get("registrar") or {}
-                if isinstance(reg, dict):
-                    name = reg.get("name") or reg.get("organization")
-                    if name:
-                        enrichment["whois_registrar"] = name
-
-                rnt = whodat_data.get("registrant") or {}
-                if isinstance(rnt, dict):
-                    name = rnt.get("name") or rnt.get("organization")
-                    if name:
-                        enrichment["whois_registrant"] = name
-                    if rnt.get("country"):
-                        enrichment["whois_country"] = rnt["country"]
-
-            return enrichment
+            return resp.json()
     except Exception as e:
-        logger.error(f"Who-dat fetch failed for {domain_name}: {e}")
+        logger.error(f"Who-dat request failed for {domain_name}: {e}")
         return None
+
+
+def _is_registered(whodat_data: dict) -> bool:
+    """Check whether who-dat response indicates the domain is actually registered.
+
+    A domain is considered registered when the WHOIS/RDAP data contains at
+    least one of: a created_date, a registrar name, or a registrant name.
+    Bare 200 responses from who-dat that lack these fields are treated as
+    *not registered*.
+    """
+    if not isinstance(whodat_data, dict):
+        return False
+
+    d = whodat_data.get("domain") or {}
+    if isinstance(d, dict) and d.get("created_date"):
+        return True
+
+    reg = whodat_data.get("registrar") or {}
+    if isinstance(reg, dict) and (reg.get("name") or reg.get("organization")):
+        return True
+
+    rnt = whodat_data.get("registrant") or {}
+    if isinstance(rnt, dict) and (rnt.get("name") or rnt.get("organization")):
+        return True
+
+    return False
+
+
+def _parse_whodat(whodat_data: dict, customer: str = None) -> dict:
+    """Parse raw who-dat JSON into an enrichment dict for the database."""
+    enrichment = {"whodat_raw": json.dumps(whodat_data)}
+    if customer:
+        enrichment["customer"] = customer
+
+    if isinstance(whodat_data, dict):
+        d = whodat_data.get("domain") or {}
+        if isinstance(d, dict):
+            for src, dst in [("created_date", "whois_created"), ("updated_date", "whois_updated"), ("expiration_date", "whois_expires")]:
+                if d.get(src):
+                    enrichment[dst] = d[src]
+
+        reg = whodat_data.get("registrar") or {}
+        if isinstance(reg, dict):
+            name = reg.get("name") or reg.get("organization")
+            if name:
+                enrichment["whois_registrar"] = name
+
+        rnt = whodat_data.get("registrant") or {}
+        if isinstance(rnt, dict):
+            name = rnt.get("name") or rnt.get("organization")
+            if name:
+                enrichment["whois_registrant"] = name
+            if rnt.get("country"):
+                enrichment["whois_country"] = rnt["country"]
+
+    return enrichment
+
+
+def _fetch_whodat(domain_name: str, customer: str = None) -> dict | None:
+    """Call who-dat, validate the domain is registered, and return enrichment dict.
+
+    Returns None when who-dat fails OR the response lacks registration signals.
+    """
+    whodat_data = _call_whodat(domain_name)
+    if whodat_data is None:
+        return None
+    if not _is_registered(whodat_data):
+        logger.info(f"Who-dat returned data for {domain_name} but no registration signals found — treating as not registered")
+        return None
+    return _parse_whodat(whodat_data, customer)
 
 
 def enrich_with_whodat(domain_name: str, customer: str = None):
