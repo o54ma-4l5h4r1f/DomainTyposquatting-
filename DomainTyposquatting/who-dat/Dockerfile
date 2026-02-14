@@ -2,7 +2,7 @@
 FROM node:latest AS frontend-builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm install
+RUN npm install && find node_modules -type f -path "*/bin/*" -exec chmod +x {} +
 COPY ./ ./
 RUN node ./node_modules/typescript/bin/tsc && node ./node_modules/vite/bin/vite.js build
 
