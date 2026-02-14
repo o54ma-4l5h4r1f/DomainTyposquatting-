@@ -108,7 +108,42 @@ def init_db():
                     "CREATE INDEX IF NOT EXISTS idx_cd_customer ON customer_domains(customer_name)"
                 )
 
-                # Extend the shared domains table with action columns
+                # Ensure the shared domains table exists (orchestrator-api
+                # normally creates it, but frontend-api may start first).
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS domains (
+                        domain            TEXT PRIMARY KEY,
+                        customer          TEXT,
+                        original_domain   TEXT,
+                        source            TEXT,
+                        first_seen_at     TIMESTAMPTZ,
+                        last_updated_at   TIMESTAMPTZ,
+                        fuzzer            TEXT,
+                        dns_a             TEXT,
+                        dns_aaaa          TEXT,
+                        dns_mx            TEXT,
+                        dns_ns            TEXT,
+                        whois_registrar   TEXT,
+                        whois_created     TEXT,
+                        whois_updated     TEXT,
+                        whois_expires     TEXT,
+                        whois_registrant  TEXT,
+                        whois_country     TEXT,
+                        geoip_country     TEXT,
+                        http_banner       TEXT,
+                        smtp_banner       TEXT,
+                        lsh_ssdeep        TEXT,
+                        lsh_tlsh          TEXT,
+                        mx_can_intercept  INTEGER,
+                        nrd_date          TEXT,
+                        nrd_keyword_matched TEXT,
+                        whodat_raw        TEXT
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
+
+                # Add dashboard action columns to the domains table
                 for col, dtype in [
                     ("action_status", "TEXT"),
                     ("action_taken_at", "TIMESTAMPTZ"),

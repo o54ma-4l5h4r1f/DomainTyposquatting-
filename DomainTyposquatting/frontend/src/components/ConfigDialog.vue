@@ -118,6 +118,7 @@ import {
   removeKeyword,
   addMonitoredDomain,
   removeMonitoredDomain,
+  ensureCustomer,
 } from '../api'
 
 const props = defineProps<{
@@ -150,6 +151,8 @@ async function loadConfig() {
   configError.value = ''
   config.value = null
   try {
+    // Ensure the customer row exists before fetching its config
+    await ensureCustomer(activeCustomer.value)
     config.value = await fetchCustomerConfig(activeCustomer.value)
   } catch (err) {
     configError.value = `Could not load config: ${err}`
