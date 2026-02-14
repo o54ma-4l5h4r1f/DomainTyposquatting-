@@ -229,12 +229,13 @@ def download_nrd(date: str) -> str:
 # === Who-dat enrichment ===
 
 
-def enrich_with_whodat(domain_name: str, customer: str = None):
+def _fetch_whodat(domain_name: str, customer: str = None) -> dict | None:
+    """Fetch WHOIS from who-dat and return parsed enrichment dict, or None."""
     try:
         with httpx.Client(timeout=15.0) as client:
             resp = client.get(f"{WHO_DAT_URL}/{domain_name}")
             if resp.status_code != 200:
-                return
+                return None
 
             whodat_data = resp.json()
             enrichment = {"whodat_raw": json.dumps(whodat_data)}
@@ -262,10 +263,20 @@ def enrich_with_whodat(domain_name: str, customer: str = None):
                     if rnt.get("country"):
                         enrichment["whois_country"] = rnt["country"]
 
-            upsert_domain(domain_name, enrichment)
-            logger.info(f"Who-dat enrichment done: {domain_name}")
+            return enrichment
     except Exception as e:
-        logger.error(f"Who-dat enrichment failed for {domain_name}: {e}")
+        logger.error(f"Who-dat fetch failed for {domain_name}: {e}")
+        return None
+
+
+def enrich_with_whodat(domain_name: str, customer: str = None):
+    """Fetch WHOIS and upsert enrichment to DB."""
+    enrichment = _fetch_whodat(domain_name, customer)
+    if enrichment:
+        upsert_domain(domain_name, enrichment)
+        logger.info(f"Who-dat enrichment done: {domain_name}")
+    else:
+        logger.warning(f"Who-dat enrichment returned no data: {domain_name}")
 
 
 # === Background tasks ===
@@ -368,22 +379,46 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
                 matches.append({"domain": line_stripped, "keyword": keyword})
                 break
 
-    # Write to DB
+    # Write to DB — gate on registered
     matched_domains = []
-    for match in matches:
-        upsert_domain(match["domain"], {
-            "customer": request.Customer,
-            "source": "whoisds",
-            "nrd_date": request.date,
-            "nrd_keyword_matched": match["keyword"],
-        })
-        matched_domains.append(match["domain"])
+    if request.registered:
+        # Only store NRD domains confirmed registered via WHOIS
+        for match in matches:
+            domain_name = match["domain"]
+            nrd_data = {
+                "customer": request.Customer,
+                "source": "whoisds",
+                "nrd_date": request.date,
+                "nrd_keyword_matched": match["keyword"],
+            }
+            whois_data = _fetch_whodat(domain_name, request.Customer)
+            if whois_data:
+                if request.enrich_whois:
+                    merged = {**nrd_data, **whois_data}
+                    upsert_domain(domain_name, merged)
+                    logger.info(f"[nrd+whois] {domain_name}: stored (scan + WHOIS merged)")
+                else:
+                    upsert_domain(domain_name, nrd_data)
+                    logger.info(f"[nrd] {domain_name}: stored (scan only, registered)")
+                matched_domains.append(domain_name)
+            else:
+                logger.info(f"[nrd] {domain_name}: skipped (not registered)")
+    else:
+        # Store all matched NRD domains directly
+        for match in matches:
+            upsert_domain(match["domain"], {
+                "customer": request.Customer,
+                "source": "whoisds",
+                "nrd_date": request.date,
+                "nrd_keyword_matched": match["keyword"],
+            })
+            matched_domains.append(match["domain"])
 
-    logger.info(f"NRD search: {len(matched_domains)} matches for {request.Customer} ({request.date})")
+        # Background WHOIS enrichment only when not already done inline
+        if request.enrich_whois and matched_domains:
+            background_tasks.add_task(enrich_batch_background, matched_domains, request.Customer)
 
-    # Background enrichment
-    if request.enrich_whois and matched_domains:
-        background_tasks.add_task(enrich_batch_background, matched_domains, request.Customer)
+    logger.info(f"NRD search: {len(matched_domains)} stored for {request.Customer} ({request.date})")
 
     if request.pass_to_dnstwist and matched_domains:
         background_tasks.add_task(
@@ -391,15 +426,21 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
             request.enrich_whois, request.registered, request.fuzzers,
         )
 
+    whois_status = "skipped"
+    if request.registered:
+        whois_status = "inline (registered gate)" if not request.enrich_whois else "inline (merged)"
+    elif request.enrich_whois and matched_domains:
+        whois_status = "queued"
+
     return {
         "status": "success",
         "customer": request.Customer,
         "date": request.date,
         "keywords": cleaned_keywords,
-        "total_matches": len(matched_domains),
+        "total_nrd_matches": len(matches),
+        "stored_in_db": len(matched_domains),
         "matches": matches,
-        "written_to_db": len(matched_domains),
-        "whois_enrichment": "queued" if request.enrich_whois and matched_domains else "skipped",
+        "whois_enrichment": whois_status,
         "dnstwist_scan": "queued" if request.pass_to_dnstwist and matched_domains else "skipped",
     }
 
