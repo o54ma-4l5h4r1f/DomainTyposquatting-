@@ -216,12 +216,13 @@ def complete_task(task_id: str, domains_found: int = 0, error: str = None):
 # === Who-dat enrichment ===
 
 
-def enrich_with_whodat(domain_name: str, customer: str = None):
+def _fetch_whodat(domain_name: str, customer: str = None) -> dict | None:
+    """Call who-dat and return parsed enrichment dict, or None on failure."""
     try:
         with httpx.Client(timeout=15.0) as client:
             resp = client.get(f"{WHO_DAT_URL}/{domain_name}")
             if resp.status_code != 200:
-                return
+                return None
 
             whodat_data = resp.json()
             enrichment = {"whodat_raw": json.dumps(whodat_data)}
@@ -249,18 +250,26 @@ def enrich_with_whodat(domain_name: str, customer: str = None):
                     if rnt.get("country"):
                         enrichment["whois_country"] = rnt["country"]
 
-            upsert_domain(domain_name, enrichment)
-            logger.info(f"Who-dat enrichment done: {domain_name}")
+            return enrichment
     except Exception as e:
         logger.error(f"Who-dat enrichment failed for {domain_name}: {e}")
+        return None
+
+
+def enrich_with_whodat(domain_name: str, customer: str = None):
+    """Fetch WHOIS data and upsert into DB (used for standalone enrichment)."""
+    enrichment = _fetch_whodat(domain_name, customer)
+    if enrichment:
+        upsert_domain(domain_name, enrichment)
+        logger.info(f"Who-dat enrichment done: {domain_name}")
 
 
 # === Background scan ===
 
 
-def store_scan_results(results: list, customer: str, original_domain: str) -> list:
-    """Parse dnstwist results and upsert each domain into PostgreSQL. Returns list of discovered domain names."""
-    discovered = []
+def _parse_scan_results(results: list, customer: str, original_domain: str) -> list:
+    """Parse dnstwist JSON results into a list of (domain_name, data) tuples."""
+    parsed = []
     for result in results:
         fuzzer = result.get("fuzzer", "")
         domain_name = result.get("domain", "")
@@ -287,18 +296,16 @@ def store_scan_results(results: list, customer: str, original_domain: str) -> li
         if result.get("mx_spy") is not None:
             data["mx_can_intercept"] = 1 if result["mx_spy"] else 0
 
-        upsert_domain(domain_name, data)
-        discovered.append(domain_name)
-
-    return discovered
+        parsed.append((domain_name, data))
+    return parsed
 
 
 def run_scan_background(customer: str, domains: list, registered: bool,
                         fuzzers: str, enrich_whois: bool, task_id: str):
-    """Phase 1: dnstwist scan + store in DB. Phase 2: who-dat enrichment (independent)."""
+    """Scan domains via dnstwist. When enrich_whois is enabled, only domains
+    with successful WHOIS data are stored in the database."""
     all_discovered = []
 
-    # --- Phase 1: Scan each domain via dnstwist, store results immediately ---
     for domain in domains:
         logger.info(f"[scan] {domain} for {customer}...")
 
@@ -316,25 +323,35 @@ def run_scan_background(customer: str, domains: list, registered: bool,
                 return
 
             results = response.json().get("results", [])
-            discovered = store_scan_results(results, customer, domain)
-            all_discovered.extend(discovered)
-            logger.info(f"[scan] {domain}: {len(discovered)} domains found and stored in DB")
+            parsed = _parse_scan_results(results, customer, domain)
+            logger.info(f"[scan] {domain}: {len(parsed)} fuzzed domains returned by dnstwist")
+
+            if enrich_whois:
+                # Gate on WHOIS: only store domain if who-dat returns data
+                for domain_name, scan_data in parsed:
+                    whois_data = _fetch_whodat(domain_name, customer)
+                    if whois_data:
+                        merged = {**scan_data, **whois_data}
+                        upsert_domain(domain_name, merged)
+                        all_discovered.append(domain_name)
+                        logger.info(f"[scan+whois] {domain_name}: stored (WHOIS success)")
+                    else:
+                        logger.info(f"[scan+whois] {domain_name}: skipped (no WHOIS data)")
+            else:
+                # No WHOIS required — store all scan results directly
+                for domain_name, scan_data in parsed:
+                    upsert_domain(domain_name, scan_data)
+                    all_discovered.append(domain_name)
+
+            logger.info(f"[scan] {domain}: {len(all_discovered)} domains stored in DB")
 
         except Exception as e:
             logger.error(f"[scan] failed for {domain}: {e}")
             complete_task(task_id, error=str(e))
             return
 
-    # Task complete — all scan results are in the database
     complete_task(task_id, domains_found=len(all_discovered))
     logger.info(f"[scan] Task {task_id} complete: {len(all_discovered)} total domains for {customer}")
-
-    # --- Phase 2: Who-dat enrichment (runs after scan is done, independent) ---
-    if enrich_whois and all_discovered:
-        logger.info(f"[whois] Starting who-dat enrichment for {len(all_discovered)} domains...")
-        for d in all_discovered:
-            enrich_with_whodat(d, customer)
-        logger.info(f"[whois] Enrichment complete for {customer}: {len(all_discovered)} domains")
 
 
 # === Startup ===
