@@ -217,14 +217,51 @@ def enrich_with_whodat(domain_name: str, customer: str = None):
 # === Background scan ===
 
 
+def store_scan_results(results: list, customer: str, original_domain: str) -> list:
+    """Parse dnstwist results and upsert each domain into PostgreSQL. Returns list of discovered domain names."""
+    discovered = []
+    for result in results:
+        fuzzer = result.get("fuzzer", "")
+        domain_name = result.get("domain", "")
+        if fuzzer == "*original" or domain_name == original_domain or not domain_name:
+            continue
+
+        data = {"customer": customer, "original_domain": original_domain, "source": "dnstwist", "fuzzer": fuzzer}
+
+        for field in ("dns_a", "dns_aaaa", "dns_mx", "dns_ns"):
+            val = result.get(field)
+            if val:
+                data[field] = json.dumps(val) if isinstance(val, list) else str(val)
+
+        if result.get("geoip"):
+            data["geoip_country"] = result["geoip"]
+        if result.get("banner_http"):
+            data["http_banner"] = result["banner_http"]
+        if result.get("banner_smtp"):
+            data["smtp_banner"] = result["banner_smtp"]
+        if result.get("ssdeep"):
+            data["lsh_ssdeep"] = result["ssdeep"]
+        if result.get("tlsh"):
+            data["lsh_tlsh"] = result["tlsh"]
+        if result.get("mx_spy") is not None:
+            data["mx_can_intercept"] = 1 if result["mx_spy"] else 0
+
+        upsert_domain(domain_name, data)
+        discovered.append(domain_name)
+
+    return discovered
+
+
 def run_scan_background(customer: str, domains: list, registered: bool,
                         fuzzers: str, enrich_whois: bool, task_id: str):
+    """Phase 1: dnstwist scan + store in DB. Phase 2: who-dat enrichment (independent)."""
     all_discovered = []
 
+    # --- Phase 1: Scan each domain via dnstwist, store results immediately ---
     for domain in domains:
-        logger.info(f"Scanning {domain} for {customer}...")
+        logger.info(f"[scan] {domain} for {customer}...")
 
-        payload = {"domain": domain, "registered": registered, "forward": False, "async_mode": False}
+        payload = {"domain": domain, "registered": registered}
         if fuzzers:
             payload["fuzzers"] = fuzzers
 
@@ -233,52 +270,30 @@ def run_scan_background(customer: str, domains: list, registered: bool,
                 response = client.post(f"{DNSTWIST_API_URL}/scan", json=payload)
 
             if response.status_code != 200:
+                logger.error(f"[scan] dnstwist returned {response.status_code} for {domain}")
                 complete_task(task_id, error=f"dnstwist {response.status_code}: {response.text[:200]}")
                 return
 
-            for result in response.json().get("results", []):
-                fuzzer = result.get("fuzzer", "")
-                domain_name = result.get("domain", "")
-                if fuzzer == "*original" or domain_name == domain or not domain_name:
-                    continue
-
-                enrichment = {"customer": customer, "original_domain": domain, "source": "dnstwist", "fuzzer": fuzzer}
-
-                for field in ("dns_a", "dns_aaaa", "dns_mx", "dns_ns"):
-                    val = result.get(field)
-                    if val:
-                        enrichment[field] = json.dumps(val) if isinstance(val, list) else str(val)
-
-                if result.get("geoip"):
-                    enrichment["geoip_country"] = result["geoip"]
-                if result.get("banner_http"):
-                    enrichment["http_banner"] = result["banner_http"]
-                if result.get("banner_smtp"):
-                    enrichment["smtp_banner"] = result["banner_smtp"]
-                if result.get("ssdeep"):
-                    enrichment["lsh_ssdeep"] = result["ssdeep"]
-                if result.get("tlsh"):
-                    enrichment["lsh_tlsh"] = result["tlsh"]
-                if result.get("mx_spy") is not None:
-                    enrichment["mx_can_intercept"] = 1 if result["mx_spy"] else 0
-
-                upsert_domain(domain_name, enrichment)
-                all_discovered.append(domain_name)
-
-            logger.info(f"Stored {len(all_discovered)} domains for {customer} (source: {domain})")
+            results = response.json().get("results", [])
+            discovered = store_scan_results(results, customer, domain)
+            all_discovered.extend(discovered)
+            logger.info(f"[scan] {domain}: {len(discovered)} domains found and stored in DB")
 
         except Exception as e:
-            logger.error(f"Scan failed for {domain}: {e}")
+            logger.error(f"[scan] failed for {domain}: {e}")
             complete_task(task_id, error=str(e))
             return
 
+    # Task complete — all scan results are in the database
     complete_task(task_id, domains_found=len(all_discovered))
+    logger.info(f"[scan] Task {task_id} complete: {len(all_discovered)} total domains for {customer}")
 
+    # --- Phase 2: Who-dat enrichment (runs after scan is done, independent) ---
     if enrich_whois and all_discovered:
-        logger.info(f"Starting who-dat enrichment for {len(all_discovered)} domains...")
+        logger.info(f"[whois] Starting who-dat enrichment for {len(all_discovered)} domains...")
         for d in all_discovered:
             enrich_with_whodat(d, customer)
-        logger.info(f"Who-dat enrichment complete for {customer}")
+        logger.info(f"[whois] Enrichment complete for {customer}: {len(all_discovered)} domains")
 
 
 # === Startup ===
