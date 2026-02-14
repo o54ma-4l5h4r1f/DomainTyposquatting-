@@ -3,6 +3,9 @@ DNSTwist Orchestrator API - Container App
 Central orchestrator for domain typosquatting detection.
 Manages a unified domain database that all services enrich.
 
+Database: PostgreSQL (local Docker + Azure Database for PostgreSQL Flexible Server)
+Debug UI: pgAdmin at http://localhost:5050
+
 Services:
 - dnstwist-api (port 8000)  → scans & sends results via callback
 - whoisds-api  (port 8002)  → NRD keyword matches, pushed here
@@ -27,7 +30,8 @@ import logging
 import json
 import os
 import httpx
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import uuid
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -45,137 +49,155 @@ app = FastAPI(
 DNSTWIST_API_URL = os.environ.get("DNSTWIST_API_URL", "http://dnstwist-api:8000")
 DNSTWIST_API_KEY = os.environ.get("DNSTWIST_API_KEY", "")
 WHO_DAT_URL = os.environ.get("WHO_DAT_URL", "http://who-dat:8080")
-DATA_DIR = os.environ.get("DATA_DIR", "/data/dnstwist-results")
-DB_PATH = os.environ.get("DB_PATH", "/data/dnstwist-results/domains.db")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/typosquatting"
+)
 
-# === SQLite Unified Database ===
+# === PostgreSQL Unified Database ===
 
 
 def init_db():
-    """Initialize the unified domain database."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
-        # --- Tasks table (scan tracking) ---
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                customer TEXT NOT NULL,
-                domain TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                submitted_at TEXT NOT NULL,
-                completed_at TEXT
+    """Initialize the unified domain database (PostgreSQL)."""
+    with psycopg2.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            # --- Tasks table (scan tracking) ---
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY,
+                    customer TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    submitted_at TIMESTAMPTZ NOT NULL,
+                    completed_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer)"
             )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
-
-        # --- Unified domains table ---
-        # One row per unique domain. All services upsert into this table.
-        # Schema is flat for Cosmos DB compatibility.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS domains (
-                domain TEXT PRIMARY KEY,
-                customer TEXT,
-                original_domain TEXT,
-                source TEXT,
-                first_seen_at TEXT,
-                last_updated_at TEXT,
-
-                -- DNSTwist enrichment
-                fuzzer TEXT,
-                dns_a TEXT,
-                dns_aaaa TEXT,
-                dns_mx TEXT,
-                dns_ns TEXT,
-
-                -- WHOIS enrichment (dnstwist --whois or who-dat)
-                whois_registrar TEXT,
-                whois_created TEXT,
-                whois_updated TEXT,
-                whois_expires TEXT,
-                whois_registrant TEXT,
-                whois_country TEXT,
-
-                -- GeoIP enrichment
-                geoip_country TEXT,
-
-                -- Web enrichment
-                http_banner TEXT,
-                smtp_banner TEXT,
-                lsh_ssdeep TEXT,
-                lsh_tlsh TEXT,
-
-                -- MX check
-                mx_can_intercept INTEGER,
-
-                -- WhoisDS NRD enrichment
-                nrd_date TEXT,
-                nrd_keyword_matched TEXT,
-
-                -- Who-dat full RDAP JSON
-                whodat_raw TEXT
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)"
             )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
+
+            # --- Unified domains table ---
+            # One row per unique domain. All services upsert into this table.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS domains (
+                    domain TEXT PRIMARY KEY,
+                    customer TEXT,
+                    original_domain TEXT,
+                    source TEXT,
+                    first_seen_at TIMESTAMPTZ,
+                    last_updated_at TIMESTAMPTZ,
+
+                    -- DNSTwist enrichment
+                    fuzzer TEXT,
+                    dns_a TEXT,
+                    dns_aaaa TEXT,
+                    dns_mx TEXT,
+                    dns_ns TEXT,
+
+                    -- WHOIS enrichment (dnstwist --whois or who-dat)
+                    whois_registrar TEXT,
+                    whois_created TEXT,
+                    whois_updated TEXT,
+                    whois_expires TEXT,
+                    whois_registrant TEXT,
+                    whois_country TEXT,
+
+                    -- GeoIP enrichment
+                    geoip_country TEXT,
+
+                    -- Web enrichment
+                    http_banner TEXT,
+                    smtp_banner TEXT,
+                    lsh_ssdeep TEXT,
+                    lsh_tlsh TEXT,
+
+                    -- MX check
+                    mx_can_intercept INTEGER,
+
+                    -- WhoisDS NRD enrichment
+                    nrd_date TEXT,
+                    nrd_keyword_matched TEXT,
+
+                    -- Who-dat full RDAP JSON
+                    whodat_raw TEXT
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)"
+            )
         conn.commit()
 
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
+# All columns that services can upsert into (excluding PK 'domain')
+ALLOWED_COLS = [
+    "customer", "original_domain", "source", "first_seen_at", "last_updated_at",
+    "fuzzer", "dns_a", "dns_aaaa", "dns_mx", "dns_ns",
+    "whois_registrar", "whois_created", "whois_updated", "whois_expires",
+    "whois_registrant", "whois_country",
+    "geoip_country",
+    "http_banner", "smtp_banner", "lsh_ssdeep", "lsh_tlsh",
+    "mx_can_intercept",
+    "nrd_date", "nrd_keyword_matched",
+    "whodat_raw",
+]
+
+
 def upsert_domain(domain_name: str, data: dict):
     """
-    Insert or update a domain row.
+    Insert or update a domain row using PostgreSQL UPSERT.
     Only non-None values in `data` will overwrite existing columns.
     This allows different services to enrich the same row incrementally.
     """
     now = datetime.now(timezone.utc).isoformat()
     data["last_updated_at"] = now
 
-    # All allowed columns (excluding the PK 'domain')
-    allowed_cols = [
-        "customer", "original_domain", "source", "first_seen_at", "last_updated_at",
-        "fuzzer", "dns_a", "dns_aaaa", "dns_mx", "dns_ns",
-        "whois_registrar", "whois_created", "whois_updated", "whois_expires",
-        "whois_registrant", "whois_country",
-        "geoip_country",
-        "http_banner", "smtp_banner", "lsh_ssdeep", "lsh_tlsh",
-        "mx_can_intercept",
-        "nrd_date", "nrd_keyword_matched",
-        "whodat_raw",
-    ]
-
     # Filter to only columns that have non-None values
-    updates = {k: v for k, v in data.items() if k in allowed_cols and v is not None}
-
+    updates = {k: v for k, v in data.items() if k in ALLOWED_COLS and v is not None}
     if not updates:
         return
 
     with get_db() as conn:
-        # Check if row exists
-        existing = conn.execute("SELECT domain FROM domains WHERE domain = ?", (domain_name,)).fetchone()
+        with conn.cursor() as cur:
+            # Build column lists for INSERT
+            insert_cols = ["domain"] + list(updates.keys())
+            if "first_seen_at" not in updates:
+                insert_cols.append("first_seen_at")
+                insert_vals = [domain_name] + list(updates.values()) + [now]
+            else:
+                insert_vals = [domain_name] + list(updates.values())
 
-        if existing:
-            # UPDATE only the provided columns
-            set_clause = ", ".join(f"{col} = ?" for col in updates.keys())
-            values = list(updates.values()) + [domain_name]
-            conn.execute(f"UPDATE domains SET {set_clause} WHERE domain = ?", values)
-        else:
-            # INSERT new row
-            updates["first_seen_at"] = now
-            cols = ["domain"] + list(updates.keys())
-            placeholders = ", ".join(["?"] * len(cols))
-            values = [domain_name] + list(updates.values())
-            conn.execute(f"INSERT INTO domains ({', '.join(cols)}) VALUES ({placeholders})", values)
+            placeholders = ", ".join(["%s"] * len(insert_cols))
+
+            # ON CONFLICT: update only the columns being provided (not first_seen_at)
+            update_set = ", ".join(
+                f"{col} = EXCLUDED.{col}" for col in updates.keys()
+            )
+
+            sql = f"""
+                INSERT INTO domains ({', '.join(insert_cols)})
+                VALUES ({placeholders})
+                ON CONFLICT (domain) DO UPDATE SET {update_set}
+            """
+            cur.execute(sql, insert_vals)
 
 
 # === Task helpers ===
@@ -184,10 +206,17 @@ def upsert_domain(domain_name: str, data: dict):
 def add_task(customer: str, domain: str, tracking_id: str):
     try:
         with get_db() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO tasks (id, customer, domain, status, submitted_at) VALUES (?, ?, ?, 'pending', ?)",
-                (tracking_id, customer, domain, datetime.now(timezone.utc).isoformat()),
-            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO tasks (id, customer, domain, status, submitted_at)
+                       VALUES (%s, %s, %s, 'pending', %s)
+                       ON CONFLICT (id) DO UPDATE SET
+                           customer = EXCLUDED.customer,
+                           domain = EXCLUDED.domain,
+                           status = EXCLUDED.status,
+                           submitted_at = EXCLUDED.submitted_at""",
+                    (tracking_id, customer, domain, datetime.now(timezone.utc).isoformat()),
+                )
     except Exception as e:
         logger.error(f"Failed to add task: {e}")
 
@@ -195,10 +224,11 @@ def add_task(customer: str, domain: str, tracking_id: str):
 def complete_task(customer: str, tracking_id: str):
     try:
         with get_db() as conn:
-            conn.execute(
-                "UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ? AND customer = ?",
-                (datetime.now(timezone.utc).isoformat(), tracking_id, customer),
-            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE tasks SET status = 'completed', completed_at = %s WHERE id = %s AND customer = %s",
+                    (datetime.now(timezone.utc).isoformat(), tracking_id, customer),
+                )
     except Exception as e:
         logger.error(f"Failed to complete task: {e}")
 
@@ -206,13 +236,15 @@ def complete_task(customer: str, tracking_id: str):
 def get_pending_tasks(customer: str = None) -> list:
     try:
         with get_db() as conn:
-            if customer:
-                rows = conn.execute(
-                    "SELECT * FROM tasks WHERE customer = ? AND status = 'pending'", (customer,)
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM tasks WHERE status = 'pending'").fetchall()
-            return [dict(r) for r in rows]
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if customer:
+                    cur.execute(
+                        "SELECT * FROM tasks WHERE customer = %s AND status = 'pending'",
+                        (customer,),
+                    )
+                else:
+                    cur.execute("SELECT * FROM tasks WHERE status = 'pending'")
+                return [dict(r) for r in cur.fetchall()]
     except Exception as e:
         logger.error(f"Failed to get pending tasks: {e}")
         return []
@@ -290,7 +322,7 @@ def startup():
     init_db()
     logger.info(f"Orchestrator started. dnstwist API: {DNSTWIST_API_URL}")
     logger.info(f"Who-dat URL: {WHO_DAT_URL}")
-    logger.info(f"Database: {DB_PATH}")
+    logger.info(f"Database: {DATABASE_URL.split('@')[-1]}")  # log host only, not creds
 
 
 # === Request Models ===
@@ -671,29 +703,37 @@ async def get_results(
     - source (optional): Filter by source (dnstwist, whoisds, who-dat)
     - limit / offset: Pagination
     """
-    conditions = ["customer = ?"]
+    conditions = ["customer = %s"]
     params: list = [customer]
 
     if original_domain:
-        conditions.append("original_domain = ?")
+        conditions.append("original_domain = %s")
         params.append(original_domain)
     if source:
-        conditions.append("source = ?")
+        conditions.append("source = %s")
         params.append(source)
 
     where_clause = " AND ".join(conditions)
 
     with get_db() as conn:
-        count_row = conn.execute(
-            f"SELECT COUNT(*) as cnt FROM domains WHERE {where_clause}", params
-        ).fetchone()
-        total = count_row["cnt"] if count_row else 0
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT COUNT(*) as cnt FROM domains WHERE {where_clause}", params
+            )
+            count_row = cur.fetchone()
+            total = count_row["cnt"] if count_row else 0
 
-        rows = conn.execute(
-            f"SELECT * FROM domains WHERE {where_clause} ORDER BY last_updated_at DESC LIMIT ? OFFSET ?",
-            params + [limit, offset],
-        ).fetchall()
-        domains = [dict(r) for r in rows]
+            cur.execute(
+                f"SELECT * FROM domains WHERE {where_clause} ORDER BY last_updated_at DESC LIMIT %s OFFSET %s",
+                params + [limit, offset],
+            )
+            domains = [dict(r) for r in cur.fetchall()]
+
+    # Serialize any datetime objects to ISO strings for JSON response
+    for d in domains:
+        for k, v in d.items():
+            if isinstance(v, datetime):
+                d[k] = v.isoformat()
 
     return {
         "customer": customer,
@@ -708,9 +748,11 @@ async def get_results(
 async def list_customers():
     """List all customers with domain counts."""
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT customer, COUNT(*) as domain_count FROM domains WHERE customer IS NOT NULL GROUP BY customer ORDER BY customer"
-        ).fetchall()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT customer, COUNT(*) as domain_count FROM domains WHERE customer IS NOT NULL GROUP BY customer ORDER BY customer"
+            )
+            rows = cur.fetchall()
 
     customers = [{"customer": r["customer"], "domain_count": r["domain_count"]} for r in rows]
 
@@ -724,32 +766,42 @@ async def list_customers():
 async def get_domain_detail(domain: str):
     """Get full enrichment detail for a single domain."""
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM domains WHERE domain = ?", (domain,)).fetchone()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM domains WHERE domain = %s", (domain,))
+            row = cur.fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail=f"Domain '{domain}' not found")
 
-    return dict(row)
+    result = dict(row)
+    for k, v in result.items():
+        if isinstance(v, datetime):
+            result[k] = v.isoformat()
+    return result
 
 
 @app.get("/api/health", tags=["Health"])
 async def health_check():
     """Health check endpoint."""
     domain_count = 0
+    db_ok = False
     try:
         with get_db() as conn:
-            row = conn.execute("SELECT COUNT(*) as cnt FROM domains").fetchone()
-            domain_count = row["cnt"] if row else 0
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM domains")
+                row = cur.fetchone()
+                domain_count = row[0] if row else 0
+                db_ok = True
     except Exception:
         pass
 
     return {
-        "status": "ok",
+        "status": "ok" if db_ok else "degraded",
         "service": "dnstwist-orchestrator",
         "version": "2.0.0",
+        "database": "connected" if db_ok else "disconnected",
         "dnstwist_api_url": DNSTWIST_API_URL,
         "who_dat_url": WHO_DAT_URL,
-        "db_path": DB_PATH,
         "total_domains_in_db": domain_count,
     }
 
@@ -762,4 +814,5 @@ async def root():
         "service": "dnstwist-orchestrator",
         "version": "2.0.0",
         "docs": "/docs",
+        "debug_db": "http://localhost:5050 (pgAdmin)",
     }

@@ -1,4 +1,50 @@
 services:
+  # === PostgreSQL Database ===
+  # Shared database for all services. Same engine locally and on Azure
+  # (Azure Database for PostgreSQL Flexible Server).
+  # Port 5432
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-typosquatting}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - typosquatting-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # === pgAdmin - Database Debug UI ===
+  # Browse tables, run queries, inspect data visually
+  # Port 5050 - http://localhost:5050
+  # Login: admin@admin.com / admin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD:-admin}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - typosquatting-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   # === DNSTwist Scan Engine ===
   # The core scanning API that runs dnstwist fuzzing algorithms
   # Port 8000 - Docs at http://localhost:8000/docs
@@ -34,15 +80,16 @@ services:
       - DNSTWIST_API_URL=${DNSTWIST_API_URL:-http://dnstwist-api:8000}
       - DNSTWIST_API_KEY=${DNSTWIST_API_KEY:-changeme}
       - WHO_DAT_URL=${WHO_DAT_URL:-http://who-dat:8080}
-      - DATA_DIR=/data/dnstwist-results
-      - DB_PATH=/data/dnstwist-results/domains.db
-    volumes:
-      - dnstwist-data:/data/dnstwist-results
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/typosquatting}
     networks:
       - typosquatting-net
     depends_on:
-      - dnstwist-api
-      - who-dat
+      postgres:
+        condition: service_healthy
+      dnstwist-api:
+        condition: service_started
+      who-dat:
+        condition: service_started
     restart: unless-stopped
 
   # === WhoisDS NRD API ===
@@ -87,7 +134,9 @@ services:
     restart: unless-stopped
 
 volumes:
-  dnstwist-data:
+  postgres-data:
+    driver: local
+  pgadmin-data:
     driver: local
   whoisds-data:
     driver: local
