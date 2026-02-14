@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
 COPY ./ ./
-RUN npx tsc && npx vite build
+RUN node ./node_modules/typescript/bin/tsc && node ./node_modules/vite/bin/vite.js build
 
 # Stage 2: Build the Go application
 FROM golang:latest AS go-builder
