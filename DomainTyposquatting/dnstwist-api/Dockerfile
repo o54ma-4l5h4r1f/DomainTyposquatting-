@@ -14,8 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     "dnstwist[full]" \
     fastapi \
-    uvicorn \
-    httpx
+    uvicorn
 
 # Copy API and dictionaries
 COPY api.py .

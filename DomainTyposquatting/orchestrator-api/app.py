@@ -33,7 +33,6 @@ app = FastAPI(
 
 # === Configuration ===
 DNSTWIST_API_URL = os.environ.get("DNSTWIST_API_URL", "http://dnstwist-api:8000")
-DNSTWIST_API_KEY = os.environ.get("DNSTWIST_API_KEY", "")
 WHO_DAT_URL = os.environ.get("WHO_DAT_URL", "http://who-dat:8080")
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/typosquatting"
@@ -230,12 +229,8 @@ def run_scan_background(customer: str, domains: list, registered: bool,
             payload["fuzzers"] = fuzzers
 
         try:
-            headers = {"Content-Type": "application/json"}
-            if DNSTWIST_API_KEY:
-                headers["X-API-Key"] = DNSTWIST_API_KEY
-
             with httpx.Client(timeout=600.0) as client:
-                response = client.post(f"{DNSTWIST_API_URL}/scan", json=payload, headers=headers)
+                response = client.post(f"{DNSTWIST_API_URL}/scan", json=payload)
 
             if response.status_code != 200:
                 complete_task(task_id, error=f"dnstwist {response.status_code}: {response.text[:200]}")

@@ -53,8 +53,6 @@ services:
     container_name: dnstwist-api
     ports:
       - "8000:8000"
-    environment:
-      - API_KEY=${DNSTWIST_API_KEY:-changeme}
     networks:
       - typosquatting-net
     restart: unless-stopped
@@ -69,7 +67,6 @@ services:
       - "8001:8001"
     environment:
       - DNSTWIST_API_URL=${DNSTWIST_API_URL:-http://dnstwist-api:8000}
-      - DNSTWIST_API_KEY=${DNSTWIST_API_KEY:-changeme}
       - WHO_DAT_URL=${WHO_DAT_URL:-http://who-dat:8080}
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/typosquatting}
     networks:
