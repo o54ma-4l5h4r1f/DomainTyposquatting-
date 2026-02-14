@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # === DNSTwist Scan Engine ===
   # The core scanning API that runs dnstwist fuzzing algorithms

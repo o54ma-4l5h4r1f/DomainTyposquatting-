@@ -1,14 +1,13 @@
 # Stage 1: Build the frontend
-FROM node:latest as frontend-builder
+FROM node:latest AS frontend-builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
 COPY ./ ./
-RUN npm run build
-
+RUN chmod +x ./node_modules/.bin/* && npm run build
 
 # Stage 2: Build the Go application
-FROM golang:latest as go-builder
+FROM golang:latest AS go-builder
 WORKDIR /go/src/app
 COPY . .
 COPY --from=frontend-builder /app/dist ./dist
