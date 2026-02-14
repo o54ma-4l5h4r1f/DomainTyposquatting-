@@ -1,5 +1,12 @@
 <template>
-  <div class="config-page">
+  <Dialog
+    :visible="visible"
+    @update:visible="$emit('update:visible', $event)"
+    header="Configuration"
+    :modal="true"
+    :style="{ width: '40rem' }"
+    :dismissableMask="true"
+  >
     <!-- Customer selector when multiple customers -->
     <div v-if="customers.length > 1" style="margin-bottom: 1.25rem">
       <SelectButton
@@ -20,11 +27,11 @@
       <span style="color: #8892b0; font-size: 0.85rem">{{ activeCustomer }}</span>
     </div>
 
-    <div v-if="configLoading" style="text-align: center; padding: 3rem">
+    <div v-if="configLoading" style="text-align: center; padding: 2rem">
       <i class="pi pi-spin pi-spinner" style="font-size: 1.5rem"></i>
     </div>
 
-    <div v-else-if="configError" style="text-align: center; padding: 3rem; color: #f87171">
+    <div v-else-if="configError" style="text-align: center; padding: 2rem; color: #f87171">
       {{ configError }}
     </div>
 
@@ -97,12 +104,13 @@
         </div>
       </div>
     </div>
-  </div>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
+import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import SelectButton from 'primevue/selectbutton'
@@ -116,7 +124,11 @@ import {
   ensureCustomer,
 } from '../api'
 
-const props = defineProps<{ customers: string[] }>()
+const props = defineProps<{
+  visible: boolean
+  customers: string[]
+}>()
+defineEmits<{ 'update:visible': [value: boolean] }>()
 
 const toast = useToast()
 const activeCustomer = ref('')
@@ -125,6 +137,16 @@ const configLoading = ref(false)
 const configError = ref('')
 const newKeyword = ref('')
 const newDomain = ref('')
+
+watch(
+  () => props.visible,
+  (open) => {
+    if (open && props.customers.length) {
+      if (!activeCustomer.value) activeCustomer.value = props.customers[0]
+      loadConfig()
+    }
+  }
+)
 
 async function loadConfig() {
   if (!activeCustomer.value) return
@@ -190,11 +212,4 @@ async function doRemoveDomain(d: string) {
     toast.add({ severity: 'error', summary: 'Failed', detail: String(err), life: 4000 })
   }
 }
-
-onMounted(() => {
-  if (props.customers.length) {
-    activeCustomer.value = props.customers[0]
-    loadConfig()
-  }
-})
 </script>

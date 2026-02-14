@@ -14,9 +14,17 @@
       </template>
       <template #end>
         <Button
+          label="Configure"
+          icon="pi pi-cog"
+          severity="secondary"
+          size="small"
+          @click="showConfig = true"
+        />
+        <Button
           icon="pi pi-refresh"
           severity="secondary"
           size="small"
+          style="margin-left: 0.5rem"
           @click="loadDomains"
           :loading="loading"
         />
@@ -188,6 +196,7 @@
       </template>
     </DataTable>
 
+    <ConfigDialog v-model:visible="showConfig" :customers="customers" />
   </div>
 </template>
 
@@ -200,6 +209,7 @@ import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 import SelectButton from 'primevue/selectbutton'
+import ConfigDialog from './ConfigDialog.vue'
 import type { Domain } from '../types'
 import { fetchDomains, setDomainAction, undoDomainAction } from '../api'
 
@@ -212,6 +222,7 @@ const loading = ref(false)
 const totalRecords = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(25)
+const showConfig = ref(false)
 
 const filterOptions = [
   { label: 'Pending', value: 'pending' },
