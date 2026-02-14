@@ -97,11 +97,12 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/typosquatting}
       - WHO_DAT_URL=${WHO_DAT_URL:-http://who-dat:8080}
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://orchestrator-api:8001}
+      - WHOISDS_EMAIL=${WHOISDS_EMAIL:-}
+      - WHOISDS_PASSWORD=${WHOISDS_PASSWORD:-}
     volumes:
       # Bind-mount NRD files to host so they persist across rebuilds
       # On Azure: swap this for an Azure Files share or BlobFuse mount
       - ./InstalledNRD:/data/whoisds/nrd-files
-      - whoisds-data:/data/whoisds/matched-results
     networks:
       - typosquatting-net
     depends_on:
@@ -133,8 +134,6 @@ volumes:
   postgres-data:
     driver: local
   pgadmin-data:
-    driver: local
-  whoisds-data:
     driver: local
 
 networks:
