@@ -312,7 +312,7 @@ class ScanRequest(BaseModel):
     customer: str = Field(..., description="Customer name")
     domains: List[str] = Field(..., description="List of domains to scan")
     registered: bool = Field(True, description="Only show registered domains")
-    fuzzers: Optional[str] = Field(None, description="Comma-separated fuzzers, or 'all'")
+    fuzzers: Optional[str] = Field("bitsquatting", description="Comma-separated fuzzers, or 'all'")
     enrich_whois: bool = Field(True, description="Auto-enrich with who-dat WHOIS/RDAP")
 
 
