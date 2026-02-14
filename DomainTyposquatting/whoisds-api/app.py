@@ -47,47 +47,87 @@ NRD_DIR = os.path.join(DATA_DIR, "nrd-files")
 # === Database ===
 
 
+_db_initialized = False
+
+
+def _create_tables(conn):
+    """Create all required tables and indexes."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS domains (
+                domain TEXT PRIMARY KEY,
+                customer TEXT,
+                original_domain TEXT,
+                source TEXT,
+                first_seen_at TIMESTAMPTZ,
+                last_updated_at TIMESTAMPTZ,
+                fuzzer TEXT,
+                dns_a TEXT,
+                dns_aaaa TEXT,
+                dns_mx TEXT,
+                dns_ns TEXT,
+                whois_registrar TEXT,
+                whois_created TEXT,
+                whois_updated TEXT,
+                whois_expires TEXT,
+                whois_registrant TEXT,
+                whois_country TEXT,
+                geoip_country TEXT,
+                http_banner TEXT,
+                smtp_banner TEXT,
+                lsh_ssdeep TEXT,
+                lsh_tlsh TEXT,
+                mx_can_intercept INTEGER,
+                nrd_date TEXT,
+                nrd_keyword_matched TEXT,
+                whodat_raw TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
+    conn.commit()
+
+
 def init_db():
-    """Create tables if they don't exist. Allows whoisds-api to start independently of orchestrator."""
-    with psycopg2.connect(DATABASE_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS domains (
-                    domain TEXT PRIMARY KEY,
-                    customer TEXT,
-                    original_domain TEXT,
-                    source TEXT,
-                    first_seen_at TIMESTAMPTZ,
-                    last_updated_at TIMESTAMPTZ,
-                    fuzzer TEXT,
-                    dns_a TEXT,
-                    dns_aaaa TEXT,
-                    dns_mx TEXT,
-                    dns_ns TEXT,
-                    whois_registrar TEXT,
-                    whois_created TEXT,
-                    whois_updated TEXT,
-                    whois_expires TEXT,
-                    whois_registrant TEXT,
-                    whois_country TEXT,
-                    geoip_country TEXT,
-                    http_banner TEXT,
-                    smtp_banner TEXT,
-                    lsh_ssdeep TEXT,
-                    lsh_tlsh TEXT,
-                    mx_can_intercept INTEGER,
-                    nrd_date TEXT,
-                    nrd_keyword_matched TEXT,
-                    whodat_raw TEXT
-                )
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
-        conn.commit()
+    """Initialise DB with retries so the app survives postgres being slow to start."""
+    global _db_initialized
+    import time
+
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        try:
+            with psycopg2.connect(DATABASE_URL) as conn:
+                _create_tables(conn)
+            _db_initialized = True
+            logger.info("Database tables initialised successfully")
+            return
+        except psycopg2.OperationalError as exc:
+            if attempt == max_retries:
+                logger.error(f"Could not connect to database after {max_retries} attempts: {exc}")
+                raise
+            wait = min(2 ** attempt, 30)
+            logger.warning(f"DB not ready (attempt {attempt}/{max_retries}), retrying in {wait}s …")
+            time.sleep(wait)
+
+
+def ensure_db():
+    """Lazily ensure tables exist (called from get_db on first use)."""
+    global _db_initialized
+    if _db_initialized:
+        return
+    try:
+        with psycopg2.connect(DATABASE_URL) as conn:
+            _create_tables(conn)
+        _db_initialized = True
+        logger.info("Database tables created (lazy init)")
+    except Exception as exc:
+        logger.error(f"ensure_db failed: {exc}")
+        raise
 
 
 @contextmanager
 def get_db():
+    ensure_db()
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = False
     try:
