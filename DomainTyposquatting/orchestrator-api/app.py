@@ -326,8 +326,8 @@ def run_scan_background(customer: str, domains: list, registered: bool,
             parsed = _parse_scan_results(results, customer, domain)
             logger.info(f"[scan] {domain}: {len(parsed)} fuzzed domains returned by dnstwist")
 
-            if enrich_whois:
-                # Gate on WHOIS: only store domain if who-dat returns data
+            if registered:
+                # Registered domains: only store if WHOIS returns data
                 for domain_name, scan_data in parsed:
                     whois_data = _fetch_whodat(domain_name, customer)
                     if whois_data:
@@ -338,7 +338,7 @@ def run_scan_background(customer: str, domains: list, registered: bool,
                     else:
                         logger.info(f"[scan+whois] {domain_name}: skipped (no WHOIS data)")
             else:
-                # No WHOIS required — store all scan results directly
+                # Not registered-only: store all scan results directly
                 for domain_name, scan_data in parsed:
                     upsert_domain(domain_name, scan_data)
                     all_discovered.append(domain_name)
