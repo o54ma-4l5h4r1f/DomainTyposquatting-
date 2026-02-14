@@ -1,4 +1,4 @@
-import type { DomainResponse, CustomerConfig, Customer } from './types'
+import type { DomainResponse, CustomerConfig } from './types'
 
 const BASE = '/api'
 
@@ -46,13 +46,6 @@ export async function undoDomainAction(
   const url = `${BASE}/domains/${encodeURIComponent(domain)}/action?customer=${encodeURIComponent(customer)}`
   const res = await fetch(url, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Failed to undo action: ${res.statusText}`)
-}
-
-export async function fetchCustomers(): Promise<Customer[]> {
-  const res = await fetch(`${BASE}/customers`)
-  if (!res.ok) throw new Error(`Failed to fetch customers: ${res.statusText}`)
-  const data = await res.json()
-  return data.customers
 }
 
 /** Ensure a customer row exists (upsert — safe to call repeatedly). */

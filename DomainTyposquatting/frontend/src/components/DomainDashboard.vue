@@ -14,17 +14,9 @@
       </template>
       <template #end>
         <Button
-          label="Configure"
-          icon="pi pi-cog"
-          severity="secondary"
-          size="small"
-          @click="showConfig = true"
-        />
-        <Button
           icon="pi pi-refresh"
           severity="secondary"
           size="small"
-          style="margin-left: 0.5rem"
           @click="loadDomains"
           :loading="loading"
         />
@@ -196,8 +188,6 @@
       </template>
     </DataTable>
 
-    <!-- Config dialog -->
-    <ConfigDialog v-model:visible="showConfig" :customers="customers" />
   </div>
 </template>
 
@@ -210,9 +200,8 @@ import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 import SelectButton from 'primevue/selectbutton'
-import ConfigDialog from './ConfigDialog.vue'
 import type { Domain } from '../types'
-import { fetchDomains, setDomainAction, undoDomainAction, ensureCustomer } from '../api'
+import { fetchDomains, setDomainAction, undoDomainAction } from '../api'
 
 const props = defineProps<{ customers: string[] }>()
 const toast = useToast()
@@ -223,7 +212,6 @@ const loading = ref(false)
 const totalRecords = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(25)
-const showConfig = ref(false)
 
 const filterOptions = [
   { label: 'Pending', value: 'pending' },
@@ -323,9 +311,5 @@ function actionSeverity(status: string): string {
   return map[status] || 'secondary'
 }
 
-onMounted(async () => {
-  // Auto-register customers so the config dialog works on first visit
-  await Promise.all(props.customers.map(c => ensureCustomer(c)))
-  loadDomains()
-})
+onMounted(loadDomains)
 </script>

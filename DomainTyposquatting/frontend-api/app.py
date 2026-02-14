@@ -280,23 +280,7 @@ def undo_domain_action(domain: str, customer: str = Query(...)):
     return {"status": "ok"}
 
 
-# ── Customer management (admin) ─────────────────────────────────────────────
-
-
-@app.get("/api/customers")
-def list_customers():
-    """List all customers with their tier and counts."""
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT c.*,
-                       (SELECT COUNT(*) FROM customer_keywords k WHERE k.customer_name = c.name) AS keyword_count,
-                       (SELECT COUNT(*) FROM customer_domains  d WHERE d.customer_name = c.name) AS domain_count
-                FROM customers c
-                ORDER BY c.name
-            """)
-            rows = cur.fetchall()
-    return {"customers": rows}
+# ── Customer management ──────────────────────────────────────────────────────
 
 
 @app.post("/api/customers")
