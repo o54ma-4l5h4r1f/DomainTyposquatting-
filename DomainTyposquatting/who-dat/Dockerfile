@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
 COPY ./ ./
-RUN chmod +x ./node_modules/.bin/* && npm run build
+RUN npx tsc && npx vite build
 
 # Stage 2: Build the Go application
 FROM golang:latest AS go-builder
