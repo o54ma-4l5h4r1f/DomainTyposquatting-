@@ -212,7 +212,7 @@ import Toolbar from 'primevue/toolbar'
 import SelectButton from 'primevue/selectbutton'
 import ConfigDialog from './ConfigDialog.vue'
 import type { Domain } from '../types'
-import { fetchDomains, setDomainAction, undoDomainAction } from '../api'
+import { fetchDomains, setDomainAction, undoDomainAction, ensureCustomer } from '../api'
 
 const props = defineProps<{ customers: string[] }>()
 const toast = useToast()
@@ -323,5 +323,9 @@ function actionSeverity(status: string): string {
   return map[status] || 'secondary'
 }
 
-onMounted(loadDomains)
+onMounted(async () => {
+  // Auto-register customers so the config dialog works on first visit
+  await Promise.all(props.customers.map(c => ensureCustomer(c)))
+  loadDomains()
+})
 </script>

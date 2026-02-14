@@ -55,6 +55,18 @@ export async function fetchCustomers(): Promise<Customer[]> {
   return data.customers
 }
 
+/** Ensure a customer row exists (upsert — safe to call repeatedly). */
+export async function ensureCustomer(
+  name: string,
+  tier: string = 'standard'
+): Promise<void> {
+  await fetch(`${BASE}/customers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, tier }),
+  })
+}
+
 export async function fetchCustomerConfig(
   name: string
 ): Promise<CustomerConfig> {
