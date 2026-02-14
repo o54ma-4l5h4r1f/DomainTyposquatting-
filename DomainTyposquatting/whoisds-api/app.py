@@ -298,24 +298,15 @@ def _parse_whodat(whodat_data: dict, customer: str = None) -> dict:
     return enrichment
 
 
-def _fetch_whodat(domain_name: str, customer: str = None) -> dict | None:
-    """Call who-dat, validate the domain is registered, and return enrichment dict.
+def enrich_with_whodat(domain_name: str, customer: str = None):
+    """Fetch WHOIS and upsert enrichment to DB.
 
-    Returns None when who-dat fails OR the response lacks registration signals.
+    Used for NRD domains which are known-registered, so no registration
+    validation is needed — just fetch and store whatever who-dat returns.
     """
     whodat_data = _call_whodat(domain_name)
-    if whodat_data is None:
-        return None
-    if not _is_registered(whodat_data):
-        logger.info(f"Who-dat returned data for {domain_name} but no registration signals found — treating as not registered")
-        return None
-    return _parse_whodat(whodat_data, customer)
-
-
-def enrich_with_whodat(domain_name: str, customer: str = None):
-    """Fetch WHOIS and upsert enrichment to DB."""
-    enrichment = _fetch_whodat(domain_name, customer)
-    if enrichment:
+    if whodat_data is not None:
+        enrichment = _parse_whodat(whodat_data, customer)
         upsert_domain(domain_name, enrichment)
         logger.info(f"Who-dat enrichment done: {domain_name}")
     else:
