@@ -1,0 +1,198 @@
+/* ── Global ─────────────────────────────────────────────────────── */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #e0e0e0;
+}
+
+/* ── App layout ────────────────────────────────────────────────── */
+
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.header-left h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.brand {
+  font-size: 0.8rem;
+  color: #00d4ff;
+  font-weight: 500;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  padding-left: 0.75rem;
+}
+
+.app-main {
+  flex: 1;
+  padding: 1.5rem;
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ── Dashboard ─────────────────────────────────────────────────── */
+
+.dashboard-toolbar {
+  margin-bottom: 1rem;
+  background: rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 8px;
+}
+
+.domain-table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* ── Action buttons ────────────────────────────────────────────── */
+
+.action-buttons {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+/* ── Expanded row detail ───────────────────────────────────────── */
+
+.domain-detail {
+  padding: 1rem 2rem;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.5rem;
+}
+
+.detail-section h4 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00d4ff;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.2rem 0;
+  font-size: 0.85rem;
+}
+
+.detail-row span:first-child {
+  color: #8892b0;
+  font-weight: 500;
+}
+
+.detail-row span:last-child {
+  color: #e0e0e0;
+  text-align: right;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-meta {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.8rem;
+  color: #8892b0;
+}
+
+/* ── Config dialog ─────────────────────────────────────────────── */
+
+.config-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 0.4rem;
+}
+
+.config-item span {
+  font-family: monospace;
+  font-size: 0.9rem;
+}
+
+.config-add {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.config-add .p-inputtext {
+  flex: 1;
+}
+
+.config-section-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00d4ff;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.tier-badge {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.tier-standard {
+  background: rgba(100, 116, 139, 0.25);
+  color: #94a3b8;
+}
+
+.tier-premium {
+  background: rgba(0, 212, 255, 0.15);
+  color: #00d4ff;
+}
+
+/* ── Responsive ────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .app-main {
+    padding: 0.75rem;
+  }
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -127,6 +127,39 @@ services:
       - typosquatting-net
     restart: unless-stopped
 
+  # === Dashboard API ===
+  # Read/write gateway between the Vue frontend and PostgreSQL.
+  # Does NOT call the processing backend — only reads/writes the shared DB.
+  # Port 8003 - Docs at http://localhost:8003/docs
+  frontend-api:
+    build: ./frontend-api
+    container_name: frontend-api
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/typosquatting}
+    networks:
+      - typosquatting-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # === Dashboard Frontend ===
+  # Vue 3 + PrimeVue SPA served by nginx.
+  # Proxies /api/* to frontend-api internally.
+  # Port 3000 - http://localhost:3000/?customers=CustomerName
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    ports:
+      - "3000:80"
+    networks:
+      - typosquatting-net
+    depends_on:
+      - frontend-api
+    restart: unless-stopped
+
 volumes:
   postgres-data:
     driver: local
