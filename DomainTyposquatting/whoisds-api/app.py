@@ -42,6 +42,7 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/typosquatting"
 )
 WHO_DAT_URL = os.environ.get("WHO_DAT_URL", "http://who-dat:8080")
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://orchestrator-api:8001")
 NRD_FOLDER = "nrd-files"
 RESULTS_FOLDER = "matched-results"
 
@@ -164,6 +165,29 @@ def enrich_batch_background(domains: list, customer: str):
     logger.info(f"Who-dat enrichment complete for {len(domains)} NRD domains ({customer})")
 
 
+def pass_to_dnstwist_background(domains: list, customer: str, enrich_whois: bool):
+    """Background task: send matched NRD domains to orchestrator for dnstwist scanning."""
+    logger.info(f"Sending {len(domains)} NRD domains to dnstwist scan ({customer})...")
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(
+                f"{ORCHESTRATOR_URL}/api/scan",
+                json={
+                    "customer": customer,
+                    "domains": domains,
+                    "registered": True,
+                    "enrich_whois": enrich_whois,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"dnstwist scan submitted: task_id={data.get('task_id')}")
+            else:
+                logger.warning(f"Orchestrator returned {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"Failed to send domains to dnstwist: {e}")
+
+
 # === Storage Helpers (Local Filesystem for NRD files) ===
 
 
@@ -214,6 +238,7 @@ class SearchKeywordsRequest(BaseModel):
     Keywords: List[str] = Field(..., description="Keywords to search for")
     date: str = Field(..., description="Date of NRD file (YYYY-MM-DD)")
     enrich_whois: bool = Field(False, description="Enrich matched domains with who-dat WHOIS/RDAP data")
+    pass_to_dnstwist: bool = Field(False, description="Send matched domains to dnstwist for typosquatting scan")
 
 
 # === Init on startup ===
@@ -339,10 +364,11 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
     **Example:**
     ```json
     {
-        "Customer": "Osama",
-        "Keywords": ["osama"],
+        "Customer": "Yanal",
+        "Keywords": ["yanal"],
         "date": "2026-02-13",
-        "enrich_whois": true
+        "enrich_whois": true,
+        "pass_to_dnstwist": true
     }
     ```
     """
@@ -440,6 +466,12 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
             enrich_batch_background, matched_domains, request.Customer
         )
 
+    # If pass_to_dnstwist, send matched domains to orchestrator for scanning
+    if request.pass_to_dnstwist and matched_domains:
+        background_tasks.add_task(
+            pass_to_dnstwist_background, matched_domains, request.Customer, request.enrich_whois
+        )
+
     return {
         "status": "success",
         "customer": request.Customer,
@@ -450,6 +482,7 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
         "results_stored_at": results_file,
         "written_to_db": len(matched_domains),
         "whois_enrichment": "queued" if request.enrich_whois and matched_domains else "skipped",
+        "dnstwist_scan": "queued" if request.pass_to_dnstwist and matched_domains else "skipped",
     }
 
 
