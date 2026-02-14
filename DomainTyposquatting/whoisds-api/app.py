@@ -11,7 +11,7 @@ Endpoints:
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import logging
 import json
 import os
@@ -278,14 +278,23 @@ def enrich_batch_background(domains: list, customer: str):
     logger.info(f"Who-dat enrichment complete for {len(domains)} NRD domains ({customer})")
 
 
-def pass_to_dnstwist_background(domains: list, customer: str, enrich_whois: bool):
+def pass_to_dnstwist_background(
+    domains: list, customer: str, enrich_whois: bool,
+    registered: bool = True, fuzzers: str | None = "bitsquatting",
+):
     logger.info(f"Sending {len(domains)} NRD domains to dnstwist scan ({customer})...")
     try:
+        payload = {
+            "customer": customer,
+            "domains": domains,
+            "registered": registered,
+            "enrich_whois": enrich_whois,
+        }
+        if fuzzers:
+            payload["fuzzers"] = fuzzers
+
         with httpx.Client(timeout=30.0) as client:
-            resp = client.post(
-                f"{ORCHESTRATOR_URL}/api/scan",
-                json={"customer": customer, "domains": domains, "registered": True, "enrich_whois": enrich_whois},
-            )
+            resp = client.post(f"{ORCHESTRATOR_URL}/api/scan", json=payload)
             if resp.status_code == 200:
                 logger.info(f"dnstwist scan submitted: task_id={resp.json().get('task_id')}")
             else:
@@ -313,6 +322,8 @@ class SearchKeywordsRequest(BaseModel):
     date: str = Field(..., description="Date of NRD file (YYYY-MM-DD)")
     enrich_whois: bool = Field(False, description="Enrich matched domains with who-dat WHOIS/RDAP")
     pass_to_dnstwist: bool = Field(False, description="Send matched domains to dnstwist for scanning")
+    registered: bool = Field(True, description="Only show registered domains (used when pass_to_dnstwist is true)")
+    fuzzers: Optional[str] = Field("bitsquatting", description="Comma-separated fuzzers for dnstwist (used when pass_to_dnstwist is true)")
 
 
 # === Endpoints ===
@@ -326,7 +337,8 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
 
     ```json
     {"Customer": "Yanal", "Keywords": ["yanal"], "date": "2026-02-13",
-     "enrich_whois": true, "pass_to_dnstwist": true}
+     "enrich_whois": true, "pass_to_dnstwist": true,
+     "registered": true, "fuzzers": "bitsquatting"}
     ```
     """
     try:
@@ -374,7 +386,10 @@ async def search_keywords(request: SearchKeywordsRequest, background_tasks: Back
         background_tasks.add_task(enrich_batch_background, matched_domains, request.Customer)
 
     if request.pass_to_dnstwist and matched_domains:
-        background_tasks.add_task(pass_to_dnstwist_background, matched_domains, request.Customer, request.enrich_whois)
+        background_tasks.add_task(
+            pass_to_dnstwist_background, matched_domains, request.Customer,
+            request.enrich_whois, request.registered, request.fuzzers,
+        )
 
     return {
         "status": "success",
