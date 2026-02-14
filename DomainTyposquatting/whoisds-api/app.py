@@ -47,6 +47,45 @@ NRD_DIR = os.path.join(DATA_DIR, "nrd-files")
 # === Database ===
 
 
+def init_db():
+    """Create tables if they don't exist. Allows whoisds-api to start independently of orchestrator."""
+    with psycopg2.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS domains (
+                    domain TEXT PRIMARY KEY,
+                    customer TEXT,
+                    original_domain TEXT,
+                    source TEXT,
+                    first_seen_at TIMESTAMPTZ,
+                    last_updated_at TIMESTAMPTZ,
+                    fuzzer TEXT,
+                    dns_a TEXT,
+                    dns_aaaa TEXT,
+                    dns_mx TEXT,
+                    dns_ns TEXT,
+                    whois_registrar TEXT,
+                    whois_created TEXT,
+                    whois_updated TEXT,
+                    whois_expires TEXT,
+                    whois_registrant TEXT,
+                    whois_country TEXT,
+                    geoip_country TEXT,
+                    http_banner TEXT,
+                    smtp_banner TEXT,
+                    lsh_ssdeep TEXT,
+                    lsh_tlsh TEXT,
+                    mx_can_intercept INTEGER,
+                    nrd_date TEXT,
+                    nrd_keyword_matched TEXT,
+                    whodat_raw TEXT
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
+        conn.commit()
+
+
 @contextmanager
 def get_db():
     conn = psycopg2.connect(DATABASE_URL)
@@ -221,6 +260,7 @@ def pass_to_dnstwist_background(domains: list, customer: str, enrich_whois: bool
 @app.on_event("startup")
 def startup():
     os.makedirs(NRD_DIR, exist_ok=True)
+    init_db()
     logger.info(f"WhoisDS API started | who-dat: {WHO_DAT_URL}")
 
 

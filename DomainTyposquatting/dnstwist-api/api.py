@@ -85,7 +85,7 @@ def _build_kwargs(
     mxcheck: bool = False,
     banners: bool = False,
     useragent: Optional[str] = None,
-    format_type: str = "null",
+    format_type: str = "list",
 ) -> dict:
     """Build kwargs dict for dnstwist.run()"""
     kwargs = {"domain": domain, "format": format_type, "threads": threads}
