@@ -47,7 +47,7 @@ func MainHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get enriched data (WHOIS + DNS + Network + Security)
-	enriched, err := lib.Enrich(path)
+	enriched, err := lib.Enrich(r.Context(), path)
 	if err != nil && enriched == nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -54,31 +54,51 @@ var rdapClient = &http.Client{
 	Timeout: 10 * time.Second,
 }
 
-// GetRDAP performs an RDAP lookup and maps the result to whoisparser.WhoisInfo
+// GetRDAP performs an RDAP lookup and maps the result to whoisparser.WhoisInfo.
+// Retries up to 3 times with exponential backoff on transient failures.
 func GetRDAP(domain string) (whoisparser.WhoisInfo, error) {
-	url := fmt.Sprintf("https://rdap.org/domain/%s", domain)
+	rdapURL := fmt.Sprintf("https://rdap.org/domain/%s", domain)
 
-	resp, err := rdapClient.Get(url)
+	var result whoisparser.WhoisInfo
+	err := withRetry(3, 1*time.Second, fmt.Sprintf("RDAP[%s]", domain), func() error {
+		req, reqErr := http.NewRequest(http.MethodGet, rdapURL, nil)
+		if reqErr != nil {
+			return fmt.Errorf("create request: %w", reqErr)
+		}
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("Accept", "application/rdap+json, application/json")
+
+		resp, reqErr := rdapClient.Do(req)
+		if reqErr != nil {
+			return fmt.Errorf("request failed: %w", reqErr)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("rate limited (429)")
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("status %d", resp.StatusCode)
+		}
+
+		body, reqErr := io.ReadAll(resp.Body)
+		if reqErr != nil {
+			return fmt.Errorf("read body: %w", reqErr)
+		}
+
+		var rdap rdapResponse
+		if reqErr = json.Unmarshal(body, &rdap); reqErr != nil {
+			return fmt.Errorf("parse JSON: %w", reqErr)
+		}
+
+		result = mapRDAPToWhoisInfo(domain, &rdap)
+		return nil
+	})
+
 	if err != nil {
-		return whoisparser.WhoisInfo{}, fmt.Errorf("RDAP request failed: %w", err)
+		return whoisparser.WhoisInfo{}, fmt.Errorf("RDAP failed after retries: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return whoisparser.WhoisInfo{}, fmt.Errorf("RDAP returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return whoisparser.WhoisInfo{}, fmt.Errorf("RDAP read body failed: %w", err)
-	}
-
-	var rdap rdapResponse
-	if err := json.Unmarshal(body, &rdap); err != nil {
-		return whoisparser.WhoisInfo{}, fmt.Errorf("RDAP parse failed: %w", err)
-	}
-
-	return mapRDAPToWhoisInfo(domain, &rdap), nil
+	return result, nil
 }
 
 func mapRDAPToWhoisInfo(domain string, rdap *rdapResponse) whoisparser.WhoisInfo {

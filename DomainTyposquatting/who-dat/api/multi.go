@@ -27,7 +27,7 @@ func MultiHandler(w http.ResponseWriter, r *http.Request) {
 	domains := strings.Split(domainsQuery, ",")
 
 	// Set up a timeout context (30s for enrichment across multiple domains)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	// Get enriched data for all domains

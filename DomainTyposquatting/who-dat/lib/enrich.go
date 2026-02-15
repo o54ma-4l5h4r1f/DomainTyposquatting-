@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	whoisparser "github.com/likexian/whois-parser"
 )
@@ -56,8 +57,13 @@ type SecurityResult struct {
 	TLSH        string `json:"tlsh"`
 }
 
+// geoIPSem limits concurrent GeoIP requests to stay under ip-api.com rate limits (45/min).
+// With a concurrency of 5 and ~500ms per request, we stay well under the limit.
+var geoIPSem = make(chan struct{}, 5)
+
 // Enrich performs WHOIS lookup and all enrichment in parallel for a single domain.
-func Enrich(domain string) (*EnrichedResult, error) {
+// The context controls the overall deadline for the entire enrichment pipeline.
+func Enrich(ctx context.Context, domain string) (*EnrichedResult, error) {
 	result := &EnrichedResult{}
 	var wg sync.WaitGroup
 
@@ -67,7 +73,10 @@ func Enrich(domain string) (*EnrichedResult, error) {
 	var httpBody []byte
 	var httpBanner string
 
-	// Phase 1: WHOIS + DNS + HTTP fetch in parallel
+	// Phase 1: WHOIS + DNS + HTTP fetch in parallel (15s deadline)
+	phase1Ctx, phase1Cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer phase1Cancel()
+
 	wg.Add(3)
 
 	go func() {
@@ -77,31 +86,47 @@ func Enrich(domain string) (*EnrichedResult, error) {
 
 	go func() {
 		defer wg.Done()
-		dnsResult = LookupDNS(domain)
+		dnsResult = LookupDNS(phase1Ctx, domain)
 	}()
 
 	go func() {
 		defer wg.Done()
-		httpBody, httpBanner = FetchHTTPBanner(domain)
+		httpBody, httpBanner = FetchHTTPBanner(phase1Ctx, domain)
 	}()
 
 	wg.Wait()
 
 	// Populate WHOIS fields
 	result.WhoisInfo = whoisResult
+
+	// Always set DNS (never nil)
+	if dnsResult == nil {
+		dnsResult = &DNSResult{A: []string{}, AAAA: []string{}, MX: []MXRecord{}, NS: []string{}}
+	}
 	result.DNS = dnsResult
+
 	result.Network = &NetworkResult{HTTPBanner: httpBanner}
 	result.Security = &SecurityResult{
-		MXIntercept: dnsResult != nil && len(dnsResult.MX) > 0,
+		MXIntercept: len(dnsResult.MX) > 0,
 	}
 
-	// Phase 2: GeoIP (needs A record IP) + security hashes (need HTTP body)
+	// Phase 2: GeoIP (needs A record IP) + security hashes (need HTTP body) (10s deadline)
+	phase2Ctx, phase2Cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer phase2Cancel()
+
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		if dnsResult != nil && len(dnsResult.A) > 0 {
-			result.Network.GeoIP = LookupGeoIP(dnsResult.A[0])
+		if len(dnsResult.A) > 0 {
+			// Acquire semaphore slot to respect rate limits
+			select {
+			case geoIPSem <- struct{}{}:
+				defer func() { <-geoIPSem }()
+				result.Network.GeoIP = LookupGeoIP(phase2Ctx, dnsResult.A[0])
+			case <-phase2Ctx.Done():
+				log.Printf("GeoIP skipped for %s: context deadline", domain)
+			}
 		}
 	}()
 
@@ -123,6 +148,7 @@ func Enrich(domain string) (*EnrichedResult, error) {
 }
 
 // EnrichMulti performs enrichment for multiple domains concurrently.
+// The context controls the overall deadline across all domains.
 func EnrichMulti(ctx context.Context, domains []string) ([]EnrichedResult, error) {
 	results := make([]EnrichedResult, len(domains))
 	var wg sync.WaitGroup
@@ -131,7 +157,7 @@ func EnrichMulti(ctx context.Context, domains []string) ([]EnrichedResult, error
 		wg.Add(1)
 		go func(idx int, d string) {
 			defer wg.Done()
-			enriched, err := Enrich(d)
+			enriched, err := Enrich(ctx, d)
 			if err != nil {
 				log.Printf("Enrichment partially failed for %s: %v", d, err)
 			}
