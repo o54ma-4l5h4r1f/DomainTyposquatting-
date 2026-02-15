@@ -7,10 +7,17 @@
 }
 
 body {
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  background: #f9fafb;
   min-height: 100vh;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color: #e0e0e0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: linear-gradient(135deg, #030712 0%, #111827 100%);
+    color: #e5e7eb;
+  }
 }
 
 /* ── App layout ────────────────────────────────────────────────── */
@@ -22,13 +29,22 @@ body {
 }
 
 .app-header {
-  background: rgba(0, 0, 0, 0.25);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
   padding: 0.75rem 1.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-header {
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: none;
+  }
 }
 
 .header-left {
@@ -39,16 +55,29 @@ body {
 
 .header-left h1 {
   font-size: 1.25rem;
-  font-weight: 600;
-  color: #fff;
+  font-weight: 700;
+  color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  .header-left h1 {
+    color: #ffffff;
+  }
 }
 
 .brand {
   font-size: 0.8rem;
-  color: #00d4ff;
-  font-weight: 500;
-  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  color: #FF1631;
+  font-weight: 600;
+  border-left: 1px solid #e5e7eb;
   padding-left: 0.75rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .brand {
+    color: #FF6779;
+    border-left-color: rgba(255, 255, 255, 0.15);
+  }
 }
 
 .app-main {
@@ -63,9 +92,16 @@ body {
 
 .dashboard-toolbar {
   margin-bottom: 1rem;
-  background: rgba(0, 0, 0, 0.15) !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
   border-radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .dashboard-toolbar {
+    background: rgba(0, 0, 0, 0.2) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  }
 }
 
 .domain-table {
@@ -97,10 +133,17 @@ body {
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #00d4ff;
+  color: #FF1631;
   margin-bottom: 0.5rem;
   padding-bottom: 0.25rem;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+  border-bottom: 1px solid rgba(255, 22, 49, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  .detail-section h4 {
+    color: #FF6779;
+    border-bottom-color: rgba(255, 103, 121, 0.25);
+  }
 }
 
 .detail-row {
@@ -111,12 +154,12 @@ body {
 }
 
 .detail-row span:first-child {
-  color: #8892b0;
+  color: #6b7280;
   font-weight: 500;
 }
 
 .detail-row span:last-child {
-  color: #e0e0e0;
+  color: #374151;
   text-align: right;
   max-width: 60%;
   overflow: hidden;
@@ -124,19 +167,31 @@ body {
   white-space: nowrap;
 }
 
+@media (prefers-color-scheme: dark) {
+  .detail-row span:first-child {
+    color: #9ca3af;
+  }
+  .detail-row span:last-child {
+    color: #e5e7eb;
+  }
+}
+
 .detail-meta {
   margin-top: 1rem;
   padding-top: 0.75rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid #e5e7eb;
   font-size: 0.8rem;
-  color: #8892b0;
+  color: #6b7280;
 }
 
-/* ── Config page ───────────────────────────────────────────────── */
-
-.config-page {
-  max-width: 700px;
+@media (prefers-color-scheme: dark) {
+  .detail-meta {
+    border-top-color: rgba(255, 255, 255, 0.06);
+    color: #9ca3af;
+  }
 }
+
+/* ── Config dialog ─────────────────────────────────────────────── */
 
 .config-sections {
   display: flex;
@@ -145,10 +200,17 @@ body {
 }
 
 .config-card {
-  background: rgba(0, 0, 0, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 1.25rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .config-card {
+    background: rgba(0, 0, 0, 0.15);
+    border-color: rgba(255, 255, 255, 0.06);
+  }
 }
 
 .config-item {
@@ -157,8 +219,14 @@ body {
   justify-content: space-between;
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
+  background: #ffffff;
   margin-bottom: 0.4rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .config-item {
+    background: rgba(255, 255, 255, 0.03);
+  }
 }
 
 .config-item span {
@@ -180,9 +248,15 @@ body {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #00d4ff;
+  color: #FF1631;
   margin-bottom: 0.5rem;
   font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .config-section-label {
+    color: #FF6779;
+  }
 }
 
 .tier-badge {
@@ -194,13 +268,27 @@ body {
 }
 
 .tier-standard {
-  background: rgba(100, 116, 139, 0.25);
-  color: #94a3b8;
+  background: rgba(100, 116, 139, 0.15);
+  color: #64748b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tier-standard {
+    background: rgba(100, 116, 139, 0.25);
+    color: #94a3b8;
+  }
 }
 
 .tier-premium {
-  background: rgba(0, 212, 255, 0.15);
-  color: #00d4ff;
+  background: rgba(255, 22, 49, 0.1);
+  color: #FF1631;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tier-premium {
+    background: rgba(255, 103, 121, 0.15);
+    color: #FF6779;
+  }
 }
 
 /* ── Responsive ────────────────────────────────────────────────── */

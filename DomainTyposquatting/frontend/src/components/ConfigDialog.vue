@@ -24,7 +24,7 @@
       >
         {{ config.customer.tier }}
       </span>
-      <span style="color: #8892b0; font-size: 0.85rem">{{ activeCustomer }}</span>
+      <span style="color: var(--p-text-muted-color); font-size: 0.85rem">{{ activeCustomer }}</span>
     </div>
 
     <div v-if="configLoading" style="text-align: center; padding: 2rem">
@@ -54,7 +54,7 @@
             :disabled="!newKeyword.trim()"
           />
         </div>
-        <div v-if="!config.keywords.length" style="color: #8892b0; font-size: 0.85rem; padding: 0.5rem 0">
+        <div v-if="!config.keywords.length" style="color: var(--p-text-muted-color); font-size: 0.85rem; padding: 0.5rem 0">
           No keywords configured.
         </div>
         <div v-for="kw in config.keywords" :key="kw" class="config-item">
@@ -88,7 +88,7 @@
             :disabled="!newDomain.trim()"
           />
         </div>
-        <div v-if="!config.domains.length" style="color: #8892b0; font-size: 0.85rem; padding: 0.5rem 0">
+        <div v-if="!config.domains.length" style="color: var(--p-text-muted-color); font-size: 0.85rem; padding: 0.5rem 0">
           No monitored domains configured.
         </div>
         <div v-for="d in config.domains" :key="d" class="config-item">
