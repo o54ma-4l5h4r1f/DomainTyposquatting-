@@ -31,7 +31,7 @@
       <i class="pi pi-spin pi-spinner" style="font-size: 1.5rem"></i>
     </div>
 
-    <div v-else-if="configError" style="text-align: center; padding: 2rem; color: #f87171">
+    <div v-else-if="configError" style="text-align: center; padding: 2rem; color: #dc2626">
       {{ configError }}
     </div>
 

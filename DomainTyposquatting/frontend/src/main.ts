@@ -38,34 +38,6 @@ const CyberShieldPreset = definePreset(Aura, {
           focusColor: '#ffffff',
         },
       },
-      dark: {
-        primary: {
-          color: '#FF6779',
-          contrastColor: '#ffffff',
-          hoverColor: '#FF909D',
-          activeColor: '#FFB9C1',
-        },
-        highlight: {
-          background: '#FF6779',
-          focusBackground: '#FF909D',
-          color: '#ffffff',
-          focusColor: '#ffffff',
-        },
-        surface: {
-          0: '#000000',
-          50: '#030712',
-          100: '#111827',
-          200: '#1f2937',
-          300: '#374151',
-          400: '#4b5563',
-          500: '#6b7280',
-          600: '#9ca3af',
-          700: '#d1d5db',
-          800: '#e5e7eb',
-          900: '#f3f4f6',
-          950: '#f9fafb',
-        },
-      },
     },
   },
 })
@@ -76,7 +48,7 @@ app.use(PrimeVue, {
   theme: {
     preset: CyberShieldPreset,
     options: {
-      darkModeSelector: 'system',
+      darkModeSelector: false,
     },
   },
 })
