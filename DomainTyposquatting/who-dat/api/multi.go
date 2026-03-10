@@ -26,19 +26,19 @@ func MultiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	domains := strings.Split(domainsQuery, ",")
 
-	// Set up a timeout context (30s for enrichment across multiple domains)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// Set up a timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Get enriched data for all domains
-	allEnriched, err := lib.EnrichMulti(ctx, domains)
+	// Get Whois data for all domains
+	allWhois, err := lib.GetMultiWhois(ctx, domains)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Convert enriched data to JSON and send the response
-	respondWithJSON(w, http.StatusOK, allEnriched)
+	// Convert Whois data to JSON and send the response
+	respondWithJSON(w, http.StatusOK, allWhois)
 }
 
 // respondWithError sends an error response in JSON format

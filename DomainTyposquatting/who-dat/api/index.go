@@ -46,15 +46,15 @@ func MainHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get enriched data (WHOIS + DNS + Network + Security)
-	enriched, err := lib.Enrich(r.Context(), path)
-	if err != nil && enriched == nil {
+	// Get Whois data
+	whois, err := lib.GetWhois(path)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Convert enriched data to JSON
-	jsonResult, err := jsoniter.Marshal(enriched)
+	// Convert Whois data to JSON
+	jsonWhois, err := jsoniter.Marshal(whois)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -65,5 +65,5 @@ func MainHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET")
 
-	w.Write(jsonResult)
+	w.Write(jsonWhois)
 }
