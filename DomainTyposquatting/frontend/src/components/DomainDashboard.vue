@@ -149,14 +149,6 @@
         <div class="domain-detail">
           <div class="detail-grid">
             <div class="detail-section">
-              <h4>DNS Records</h4>
-              <div class="detail-row"><span>A:</span><span>{{ data.dns_a || '-' }}</span></div>
-              <div class="detail-row"><span>AAAA:</span><span>{{ data.dns_aaaa || '-' }}</span></div>
-              <div class="detail-row"><span>MX:</span><span>{{ data.dns_mx || '-' }}</span></div>
-              <div class="detail-row"><span>NS:</span><span>{{ data.dns_ns || '-' }}</span></div>
-            </div>
-
-            <div class="detail-section">
               <h4>WHOIS</h4>
               <div class="detail-row"><span>Registrar:</span><span>{{ data.whois_registrar || '-' }}</span></div>
               <div class="detail-row"><span>Registrant:</span><span>{{ data.whois_registrant || '-' }}</span></div>
@@ -164,25 +156,6 @@
               <div class="detail-row"><span>Created:</span><span>{{ data.whois_created || '-' }}</span></div>
               <div class="detail-row"><span>Updated:</span><span>{{ data.whois_updated || '-' }}</span></div>
               <div class="detail-row"><span>Expires:</span><span>{{ data.whois_expires || '-' }}</span></div>
-            </div>
-
-            <div class="detail-section">
-              <h4>Network</h4>
-              <div class="detail-row"><span>GeoIP:</span><span>{{ data.geoip_country || '-' }}</span></div>
-              <div class="detail-row"><span>HTTP Banner:</span><span>{{ data.http_banner || '-' }}</span></div>
-              <div class="detail-row"><span>SMTP Banner:</span><span>{{ data.smtp_banner || '-' }}</span></div>
-            </div>
-
-            <div class="detail-section">
-              <h4>Security</h4>
-              <div class="detail-row">
-                <span>MX Intercept:</span>
-                <Tag v-if="data.mx_can_intercept === 1" value="Yes" severity="danger" />
-                <Tag v-else-if="data.mx_can_intercept === 0" value="No" severity="success" />
-                <span v-else>-</span>
-              </div>
-              <div class="detail-row"><span>SSDeep:</span><span>{{ data.lsh_ssdeep || '-' }}</span></div>
-              <div class="detail-row"><span>TLSH:</span><span>{{ data.lsh_tlsh || '-' }}</span></div>
             </div>
           </div>
 
