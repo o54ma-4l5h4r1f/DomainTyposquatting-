@@ -45,10 +45,26 @@ DATABASE_URL = os.environ.get(
 _db_initialized = False
 
 
+def _ddl(cur, sql):
+    """Execute a DDL statement using a savepoint so concurrent duplicate-object
+    errors (race condition when multiple services create the same table) are
+    silently ignored instead of crashing the service."""
+    cur.execute("SAVEPOINT _ddl")
+    try:
+        cur.execute(sql)
+        cur.execute("RELEASE SAVEPOINT _ddl")
+    except (
+        psycopg2.errors.DuplicateTable,
+        psycopg2.errors.UniqueViolation,
+        psycopg2.errors.DuplicateObject,
+    ):
+        cur.execute("ROLLBACK TO SAVEPOINT _ddl")
+
+
 def _create_tables(conn):
     """Create all required tables and indexes."""
     with conn.cursor() as cur:
-        cur.execute("""
+        _ddl(cur, """
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 customer TEXT NOT NULL,
@@ -60,10 +76,10 @@ def _create_tables(conn):
                 error TEXT
             )
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+        _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer)")
+        _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
 
-        cur.execute("""
+        _ddl(cur, """
             CREATE TABLE IF NOT EXISTS domains (
                 domain TEXT PRIMARY KEY,
                 customer TEXT,
@@ -93,8 +109,8 @@ def _create_tables(conn):
                 whodat_raw TEXT
             )
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
+        _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
+        _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
     conn.commit()
 
 

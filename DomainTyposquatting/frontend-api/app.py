@@ -51,6 +51,22 @@ def get_db():
         conn.close()
 
 
+def _ddl(cur, sql):
+    """Execute a DDL statement using a savepoint so concurrent duplicate-object
+    errors (race condition when multiple services create the same table) are
+    silently ignored instead of crashing the service."""
+    cur.execute("SAVEPOINT _ddl")
+    try:
+        cur.execute(sql)
+        cur.execute("RELEASE SAVEPOINT _ddl")
+    except (
+        psycopg2.errors.DuplicateTable,
+        psycopg2.errors.UniqueViolation,
+        psycopg2.errors.DuplicateObject,
+    ):
+        cur.execute("ROLLBACK TO SAVEPOINT _ddl")
+
+
 def _retry_init(fn, retries=10, delay=2):
     for attempt in range(retries):
         try:
@@ -70,7 +86,7 @@ def init_db():
         with get_db() as conn:
             with conn.cursor() as cur:
                 # Customers
-                cur.execute("""
+                _ddl(cur, """
                     CREATE TABLE IF NOT EXISTS customers (
                         name  TEXT PRIMARY KEY,
                         tier  TEXT NOT NULL DEFAULT 'standard',
@@ -81,7 +97,7 @@ def init_db():
                 """)
 
                 # Customer keywords
-                cur.execute("""
+                _ddl(cur, """
                     CREATE TABLE IF NOT EXISTS customer_keywords (
                         id   SERIAL PRIMARY KEY,
                         customer_name TEXT NOT NULL REFERENCES customers(name) ON DELETE CASCADE,
@@ -90,12 +106,10 @@ def init_db():
                         UNIQUE(customer_name, keyword)
                     )
                 """)
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_ck_customer ON customer_keywords(customer_name)"
-                )
+                _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_ck_customer ON customer_keywords(customer_name)")
 
                 # Customer monitored domains (seeds for dnstwist)
-                cur.execute("""
+                _ddl(cur, """
                     CREATE TABLE IF NOT EXISTS customer_domains (
                         id   SERIAL PRIMARY KEY,
                         customer_name TEXT NOT NULL REFERENCES customers(name) ON DELETE CASCADE,
@@ -104,13 +118,11 @@ def init_db():
                         UNIQUE(customer_name, domain)
                     )
                 """)
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_cd_customer ON customer_domains(customer_name)"
-                )
+                _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_cd_customer ON customer_domains(customer_name)")
 
                 # Ensure the shared domains table exists (orchestrator-api
                 # normally creates it, but frontend-api may start first).
-                cur.execute("""
+                _ddl(cur, """
                     CREATE TABLE IF NOT EXISTS domains (
                         domain            TEXT PRIMARY KEY,
                         customer          TEXT,
@@ -140,8 +152,8 @@ def init_db():
                         whodat_raw        TEXT
                     )
                 """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
+                _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer)")
+                _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_domains_original ON domains(original_domain)")
 
                 # Add dashboard action columns to the domains table
                 for col, dtype in [
@@ -149,13 +161,9 @@ def init_db():
                     ("action_taken_at", "TIMESTAMPTZ"),
                     ("action_taken_by", "TEXT"),
                 ]:
-                    cur.execute(
-                        f"ALTER TABLE domains ADD COLUMN IF NOT EXISTS {col} {dtype}"
-                    )
+                    _ddl(cur, f"ALTER TABLE domains ADD COLUMN IF NOT EXISTS {col} {dtype}")
 
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_domains_action ON domains(action_status)"
-                )
+                _ddl(cur, "CREATE INDEX IF NOT EXISTS idx_domains_action ON domains(action_status)")
 
     _retry_init(_create)
     logger.info("Dashboard DB tables ready")
